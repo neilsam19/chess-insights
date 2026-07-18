@@ -1,0 +1,29 @@
+[Event "Casual Game"]
+[White "NeilSamant"]
+[Black "OpponentA"]
+[Result "1-0"]
+[Date "2026.07.01"]
+[ECO "C23"]
+[Opening "Bishop's Opening"]
+
+1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0
+
+[Event "Casual Game"]
+[White "OpponentB"]
+[Black "NeilSamant"]
+[Result "1/2-1/2"]
+[Date "2026.07.05"]
+[ECO "D30"]
+[Opening "Queen's Gambit Declined"]
+
+1. d4 d5 2. c4 e6 3. Nc3 Nf6 4. Bg5 Be7 5. e3 O-O 1/2-1/2
+
+[Event "Casual Game"]
+[White "NeilSamant"]
+[Black "OpponentC"]
+[Result "0-1"]
+[Date "2026.07.10"]
+[ECO "A00"]
+[Opening "Barnes Opening"]
+
+1. f3 e5 2. g4 Qh4# 0-1
