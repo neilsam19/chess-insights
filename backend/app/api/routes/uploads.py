@@ -17,13 +17,10 @@ router = APIRouter()
 @router.post("/uploads/preview", response_model=UploadPreviewResponse)
 async def preview_upload(
     file: UploadFile,
-    player_name: str = Form(...),
+    player_name: str = Form(""),
 ) -> UploadPreviewResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file was uploaded.")
-
-    if not player_name.strip():
-        raise HTTPException(status_code=400, detail="player_name is required.")
 
     raw_bytes = await file.read()
 

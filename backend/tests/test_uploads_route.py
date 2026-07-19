@@ -54,13 +54,20 @@ def test_missing_file_is_rejected() -> None:
     assert response.status_code == 422  # FastAPI's own required-field validation
 
 
-def test_missing_player_name_is_rejected() -> None:
+def test_omitted_player_name_returns_unknown_classification_for_all_games() -> None:
+    # Supports the "pick your name from the file" frontend flow: the games list
+    # (and thus the set of player names to choose from) is fetched before the
+    # user has told us which name is theirs.
     response = client.post(
         "/api/uploads/preview",
         files={"file": ("games.pgn", VALID_PGN.encode("utf-8"), "application/x-chess-pgn")},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
+    body = response.json()
+    assert body["games"][0]["player_color"] == "unknown"
+    assert body["games"][0]["player_result"] == "unknown"
+    assert body["stats"]["unknown_results"] == 1
 
 
 def test_empty_file_is_rejected() -> None:

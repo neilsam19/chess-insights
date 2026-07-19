@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Chess GUI companion files (e.g. opened sample-data PGNs in a desktop viewer)
+*.ini
