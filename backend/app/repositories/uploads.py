@@ -45,7 +45,10 @@ def list_uploads(db: Session, *, page: int, page_size: int) -> tuple[list[Upload
     total = db.scalar(select(func.count()).select_from(Upload)) or 0
     stmt = (
         select(Upload)
-        .order_by(Upload.uploaded_at.desc())
+        # id is a tiebreaker so pagination stays deterministic when two uploads
+        # share an uploaded_at timestamp - without it, rows could repeat or be
+        # skipped across pages.
+        .order_by(Upload.uploaded_at.desc(), Upload.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )

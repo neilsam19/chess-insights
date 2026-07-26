@@ -23,23 +23,33 @@ def _import(client: TestClient, player_name: str) -> dict:
 
 
 def test_list_uploads_is_paginated(client: TestClient) -> None:
-    _import(client, "PlayerOne")
-    _import(client, "PlayerTwo")
-    _import(client, "PlayerThree")
+    # Baseline first: a dev database may already hold previously saved
+    # analyses, so this test asserts on the delta it causes, not on absolutes.
+    baseline_total = client.get("/api/uploads", params={"page_size": 1}).json()["total"]
+
+    new_ids = {
+        _import(client, "PlayerOne")["id"],
+        _import(client, "PlayerTwo")["id"],
+        _import(client, "PlayerThree")["id"],
+    }
+    assert len(new_ids) == 3
 
     page1 = client.get("/api/uploads", params={"page": 1, "page_size": 2})
     page2 = client.get("/api/uploads", params={"page": 2, "page_size": 2})
 
     assert page1.status_code == 200
-    assert len(page1.json()["items"]) == 2
-    assert page1.json()["total"] == 3
-
     assert page2.status_code == 200
-    assert len(page2.json()["items"]) == 1
-    assert page2.json()["total"] == 3
+    assert page1.json()["total"] == baseline_total + 3
+    assert page2.json()["total"] == baseline_total + 3
 
-    all_ids = {item["id"] for item in page1.json()["items"] + page2.json()["items"]}
-    assert len(all_ids) == 3
+    # Full page, then the remainder - and the list is newest-first, so the three
+    # just-imported uploads are the first three rows across those two pages.
+    assert len(page1.json()["items"]) == 2
+    assert len(page2.json()["items"]) == min(2, baseline_total + 1)
+
+    paged_ids = [item["id"] for item in page1.json()["items"] + page2.json()["items"]]
+    assert len(paged_ids) == len(set(paged_ids))  # no row repeats across pages
+    assert set(paged_ids[:3]) == new_ids
 
 
 def test_get_upload_returns_metadata(client: TestClient) -> None:
@@ -121,10 +131,18 @@ def test_delete_upload_cascades_to_games_and_moves(client: TestClient, db_sessio
     upload = _import(client, "NeilSamant")
     upload_id = upload["id"]
 
-    games_before = db_session.scalar(
-        select(func.count()).select_from(Game).where(Game.upload_id == upload_id)
+    game_ids = [
+        row
+        for row in db_session.execute(
+            select(Game.id).where(Game.upload_id == upload_id)
+        ).scalars()
+    ]
+    assert len(game_ids) == 3
+
+    moves_before = db_session.scalar(
+        select(func.count()).select_from(Move).where(Move.game_id.in_(game_ids))
     )
-    assert games_before == 3
+    assert moves_before > 0
 
     response = client.delete(f"/api/uploads/{upload_id}")
     assert response.status_code == 204
@@ -134,7 +152,11 @@ def test_delete_upload_cascades_to_games_and_moves(client: TestClient, db_sessio
         select(func.count()).select_from(Game).where(Game.upload_id == upload_id)
     )
     assert games_after == 0
-    moves_after = db_session.scalar(select(func.count()).select_from(Move))
+    # Scoped to this upload's own moves - unrelated rows already in the dev
+    # database must survive, and must not mask a failed cascade either.
+    moves_after = db_session.scalar(
+        select(func.count()).select_from(Move).where(Move.game_id.in_(game_ids))
+    )
     assert moves_after == 0
 
     # Both the upload and its (now-deleted) games should read back as missing.

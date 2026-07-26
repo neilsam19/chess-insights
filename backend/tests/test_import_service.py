@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -107,21 +108,28 @@ def test_blank_player_name_is_rejected(client: TestClient) -> None:
 
 
 def test_multiple_uploads_are_independent(client: TestClient, db_session) -> None:
-    client.post(
+    first = client.post(
         "/api/uploads",
         files={"file": ("sample-games.pgn", SAMPLE_PGN_BYTES, "application/x-chess-pgn")},
         data={"player_name": "NeilSamant"},
     )
-    client.post(
+    second = client.post(
         "/api/uploads",
         files={"file": ("sample-games.pgn", SAMPLE_PGN_BYTES, "application/x-chess-pgn")},
         data={"player_name": "OpponentA"},
     )
 
-    total_uploads = db_session.scalar(select(func.count()).select_from(Upload))
-    total_games = db_session.scalar(select(func.count()).select_from(Game))
-    assert total_uploads == 2
-    assert total_games == 6
+    # Scoped to the ids this test created - a dev database with previously
+    # saved analyses in it must not change the outcome.
+    upload_ids = [first.json()["id"], second.json()["id"]]
+    assert len(set(upload_ids)) == 2
+
+    for upload_id in upload_ids:
+        assert db_session.get(Upload, upload_id) is not None
+        game_count = db_session.scalar(
+            select(func.count()).select_from(Game).where(Game.upload_id == upload_id)
+        )
+        assert game_count == 3
 
 
 def test_rollback_on_persistence_failure_leaves_no_partial_import(
@@ -142,8 +150,16 @@ def test_rollback_on_persistence_failure_leaves_no_partial_import(
 
     db_session.rollback()
 
-    assert db_session.scalar(select(func.count()).select_from(Upload)) == 0
-    assert db_session.scalar(select(func.count()).select_from(Game)) == 0
+    # Scoped to this file+player rather than a global row count, so pre-existing
+    # rows in the dev database can't mask (or fake) a clean rollback.
+    file_sha256 = hashlib.sha256(SAMPLE_PGN_BYTES).hexdigest()
+    orphaned = db_session.execute(
+        select(Upload).where(
+            Upload.file_sha256 == file_sha256,
+            Upload.normalized_player_name == "neilsamant",
+        )
+    ).scalars().all()
+    assert orphaned == []
 
 
 def test_duplicate_detected_at_service_level(db_session) -> None:
