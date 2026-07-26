@@ -1,14 +1,9 @@
 import type { UploadStats } from "../types/upload";
+import { formatOpeningStatName } from "../utils/openings";
 import { StatCard } from "./StatCard";
 
 interface DashboardSummaryProps {
   stats: UploadStats;
-}
-
-const ECO_CODE_PATTERN = /^[A-E]\d{2}$/;
-
-function formatOpeningName(name: string): string {
-  return ECO_CODE_PATTERN.test(name) ? `ECO ${name}` : name;
 }
 
 export function DashboardSummary({ stats }: DashboardSummaryProps) {
@@ -37,7 +32,7 @@ export function DashboardSummary({ stats }: DashboardSummaryProps) {
           <tbody>
             {stats.openings.map((opening) => (
               <tr key={opening.name}>
-                <td>{formatOpeningName(opening.name)}</td>
+                <td>{formatOpeningStatName(opening.name)}</td>
                 <td>{opening.games}</td>
                 <td>{opening.score_percentage}%</td>
               </tr>

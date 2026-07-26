@@ -18,8 +18,11 @@ export interface Game {
   date: string | null;
   event: string | null;
   result: string;
+  // Canonical classification from the backend, not the raw PGN header.
   eco: string | null;
   opening: string | null;
+  opening_source: string | null;
+  opening_matched_ply: number | null;
   player_color: PlayerColor;
   player_result: PlayerResult;
   moves: Move[];

@@ -1,4 +1,5 @@
 import type { Game } from "../types/upload";
+import { OpeningLabel } from "./OpeningLabel";
 
 interface GameListProps {
   games: Game[];
@@ -18,9 +19,10 @@ export function GameList({ games, selectedIndex, onSelect }: GameListProps) {
             }
             onClick={() => onSelect(game.index)}
           >
-            <span>
+            <span className="game-list-players">
               {game.white} vs {game.black}
             </span>
+            <OpeningLabel name={game.opening} eco={game.eco} />
             <span className="game-result">{game.result}</span>
           </button>
         </li>

@@ -39,6 +39,8 @@ export interface GameSummary {
   user_result: PlayerResult;
   eco: string | null;
   opening_name: string | null;
+  opening_source: string | null;
+  opening_matched_ply: number | null;
   move_count: number;
 }
 
@@ -65,6 +67,8 @@ export interface GameDetail {
   user_result: PlayerResult;
   eco: string | null;
   opening_name: string | null;
+  opening_source: string | null;
+  opening_matched_ply: number | null;
   move_count: number;
   moves: Move[];
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Chessboard } from "react-chessboard";
 import type { Game } from "../types/upload";
 import { MoveList } from "./MoveList";
+import { OpeningLabel } from "./OpeningLabel";
 
 const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -30,6 +31,7 @@ export function ChessGameViewer({ game }: ChessGameViewerProps) {
         <span>{game.black}</span>
         <span className="game-result">{game.result}</span>
       </div>
+      <OpeningLabel name={game.opening} eco={game.eco} className="game-header-opening" />
 
       <div className="board-and-moves">
         <div className="board-wrapper">

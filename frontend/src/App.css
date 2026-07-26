@@ -155,6 +155,37 @@
   background: var(--accent-bg);
 }
 
+/* Players and result stay on the first line; the opening wraps onto its own
+   line beneath, so long variation names never squeeze the result. */
+.game-list-item {
+  flex-wrap: wrap;
+}
+
+.game-list-players {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+.opening-label {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.game-list-item .opening-label {
+  flex: 1 1 100%;
+  text-align: left;
+}
+
+.opening-label-unknown {
+  font-style: italic;
+  opacity: 0.75;
+}
+
+.game-header-opening {
+  font-size: 13px;
+  margin-top: -6px;
+}
+
 .game-viewer {
   flex: 1 1 420px;
   display: flex;
