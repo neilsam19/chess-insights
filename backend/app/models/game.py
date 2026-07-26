@@ -32,8 +32,14 @@ class Game(Base):
     result: Mapped[str] = mapped_column(String, nullable=False)
     user_color: Mapped[str] = mapped_column(String, nullable=False)
     user_result: Mapped[str] = mapped_column(String, nullable=False)
+    # Canonical opening classification. eco/opening_name hold the *classified*
+    # values, not the PGN's headers - those survive verbatim inside raw_pgn.
+    # All nullable: rows imported before Sprint 3 carry NULL until backfilled.
     eco: Mapped[str | None] = mapped_column(String, nullable=True)
     opening_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    opening_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    opening_matched_ply: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    opening_dataset_version: Mapped[str | None] = mapped_column(String, nullable=True)
     move_count: Mapped[int] = mapped_column(Integer, nullable=False)
     raw_pgn: Mapped[str] = mapped_column(Text, nullable=False)
     game_hash: Mapped[str] = mapped_column(String, nullable=False)

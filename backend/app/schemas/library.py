@@ -48,6 +48,8 @@ class GameSummaryOut(BaseModel):
     user_result: str
     eco: str | None
     opening_name: str | None
+    opening_source: str | None = None
+    opening_matched_ply: int | None = None
     move_count: int
 
 
@@ -76,5 +78,7 @@ class GameDetailOut(BaseModel):
     user_result: str
     eco: str | None
     opening_name: str | None
+    opening_source: str | None = None
+    opening_matched_ply: int | None = None
     move_count: int
     moves: list[MoveOut]

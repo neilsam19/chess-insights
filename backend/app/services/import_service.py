@@ -72,6 +72,8 @@ def import_pgn(
 
     for index, game in enumerate(parse_result.games):
         classification = classify_game(game, player_name)
+        # Classified server-side during parsing - never taken from the client.
+        opening = game.classification
         db.add(
             Game(
                 upload_id=upload.id,
@@ -87,8 +89,11 @@ def import_pgn(
                 result=game.result,
                 user_color=classification.color,
                 user_result=classification.result,
-                eco=game.eco,
-                opening_name=game.opening,
+                eco=opening.eco if opening else game.eco,
+                opening_name=opening.name if opening else game.opening,
+                opening_source=opening.source if opening else None,
+                opening_matched_ply=opening.matched_ply if opening else None,
+                opening_dataset_version=opening.dataset_version if opening else None,
                 move_count=len(game.moves),
                 raw_pgn=game.raw_pgn,
                 game_hash=_game_hash(game),
