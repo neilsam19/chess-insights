@@ -1,7 +1,10 @@
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import chess.pgn
+
+from app.services.opening_classifier import OpeningClassification, classify_opening
+from app.services.opening_dataset import OpeningIndex, load_opening_index
 
 
 @dataclass
@@ -24,10 +27,14 @@ class ParsedGame:
     site: str | None
     round: str | None
     result: str
+    # eco/opening stay exactly as the PGN declared them, however wrong - they
+    # are the fallback and the debugging record. Canonical values live on
+    # `classification`.
     eco: str | None
     opening: str | None
     moves: list[ParsedMove]
     raw_pgn: str
+    classification: OpeningClassification | None = field(default=None)
 
 
 @dataclass
@@ -36,9 +43,18 @@ class ParseResult:
     warnings: list[str]
 
 
-def parse_pgn_text(pgn_text: str) -> ParseResult:
+def parse_pgn_text(pgn_text: str, *, index: OpeningIndex | None = None) -> ParseResult:
+    """Parse a PGN and classify every game's opening from its positions.
+
+    `index` is injectable for tests; in normal use the vendored index is
+    loaded once per process and shared across every game in the file.
+    """
     games: list[ParsedGame] = []
     warnings: list[str] = []
+
+    # Resolved once so every game in the file classifies against the same
+    # snapshot, rather than re-resolving per game.
+    index = index if index is not None else load_opening_index()
 
     stream = io.StringIO(pgn_text)
     game_index = 0
@@ -67,6 +83,15 @@ def parse_pgn_text(pgn_text: str) -> ParseResult:
                 f"Game {game_index}: recovered with {len(game.errors)} "
                 f"move error(s), truncated at the first bad move"
             )
+
+        # A recovered game classifies from whatever prefix survived, which is
+        # why this runs after the truncation warning rather than instead of it.
+        parsed.classification = classify_opening(
+            [move.fen_after for move in parsed.moves],
+            eco_header=parsed.eco,
+            opening_header=parsed.opening,
+            index=index,
+        )
 
         games.append(parsed)
 

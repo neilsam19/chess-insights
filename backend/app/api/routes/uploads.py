@@ -80,8 +80,14 @@ async def preview_upload(
             date=game.date,
             event=game.event,
             result=game.result,
-            eco=game.eco,
-            opening=game.opening,
+            # Canonical values from position-based classification - the raw
+            # PGN headers stay on the ParsedGame for debugging only.
+            eco=game.classification.eco if game.classification else game.eco,
+            opening=game.classification.name if game.classification else game.opening,
+            opening_source=game.classification.source if game.classification else None,
+            opening_matched_ply=(
+                game.classification.matched_ply if game.classification else None
+            ),
             player_color=classification.color,
             player_result=classification.result,
             moves=[MoveOut(**vars(move)) for move in game.moves],

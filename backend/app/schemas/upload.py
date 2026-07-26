@@ -20,8 +20,11 @@ class GameOut(BaseModel):
     date: str | None = None
     event: str | None = None
     result: str
+    # Canonical classification, not the raw PGN header.
     eco: str | None = None
     opening: str | None = None
+    opening_source: str | None = None
+    opening_matched_ply: int | None = None
     player_color: str
     player_result: str
     moves: list[MoveOut]

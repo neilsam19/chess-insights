@@ -100,13 +100,28 @@ def compute_stats(
     return classifications, stats
 
 
+def opening_label(game: ParsedGame) -> str:
+    """The name an opening is grouped and displayed under.
+
+    Canonical dataset classification wins; the PGN's own header is only a
+    fallback, so an upload whose headers are wrong or missing still
+    aggregates under real opening names.
+    """
+    opening = game.classification
+    if opening is not None and opening.name:
+        return opening.name
+    if opening is not None and opening.eco:
+        return opening.eco
+    return game.opening or game.eco or "Unknown"
+
+
 def _aggregate_openings(
     games: list[ParsedGame], classifications: list[GameClassification]
 ) -> list[OpeningStat]:
     by_name: dict[str, OpeningStat] = {}
 
     for game, classification in zip(games, classifications):
-        name = game.opening or game.eco or "Unknown"
+        name = opening_label(game)
         stat = by_name.setdefault(name, OpeningStat(name=name))
         stat.games += 1
         if classification.result == "win":
