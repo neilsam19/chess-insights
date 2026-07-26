@@ -1,16 +1,20 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { FileUpload } from "../components/FileUpload";
 import { PlayerNameSelect } from "../components/PlayerNameSelect";
 import { DashboardSummary } from "../components/DashboardSummary";
 import { GameList } from "../components/GameList";
 import { ChessGameViewer } from "../components/ChessGameViewer";
+import { UploadHistoryList } from "../components/UploadHistoryList";
 import { postUploadPreview, UploadError } from "../api/uploads";
+import { DuplicateUploadError, LibraryError, saveUpload } from "../api/library";
 import { getMostFrequentPlayerName, getUniquePlayerNames } from "../utils/players";
 import type { UploadPreviewResponse } from "../types/upload";
 
 type Phase = "idle" | "choosing-name" | "ready";
 
-export function UploadPage() {
+export function HomePage() {
+  const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<UploadPreviewResponse | null>(null);
@@ -18,6 +22,10 @@ export function UploadPage() {
   const [selectedName, setSelectedName] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [selectedGameIndex, setSelectedGameIndex] = useState<number | null>(null);
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [duplicateUploadId, setDuplicateUploadId] = useState<string | null>(null);
 
   async function handleFileSubmit(file: File) {
     setIsLoading(true);
@@ -62,6 +70,30 @@ export function UploadPage() {
     }
   }
 
+  async function handleSaveAnalysis() {
+    if (!uploadedFile) return;
+
+    setIsSaving(true);
+    setSaveError(null);
+    setDuplicateUploadId(null);
+
+    try {
+      const saved = await saveUpload(uploadedFile, selectedName);
+      navigate(`/uploads/${saved.id}`);
+    } catch (err) {
+      if (err instanceof DuplicateUploadError) {
+        setDuplicateUploadId(err.existingUploadId);
+        setSaveError(err.message);
+      } else if (err instanceof LibraryError) {
+        setSaveError(err.message);
+      } else {
+        setSaveError("Something went wrong while saving. Please try again.");
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   const selectedGame =
     result && selectedGameIndex !== null ? result.games[selectedGameIndex] : null;
 
@@ -95,6 +127,26 @@ export function UploadPage() {
               ))}
             </ul>
           )}
+
+          <div className="save-analysis">
+            <button type="button" onClick={handleSaveAnalysis} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save analysis"}
+            </button>
+            {saveError && (
+              <p className="upload-error" role="alert">
+                {saveError}
+                {duplicateUploadId && (
+                  <>
+                    {" "}
+                    <button type="button" onClick={() => navigate(`/uploads/${duplicateUploadId}`)}>
+                      Open existing analysis
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+
           <DashboardSummary stats={result.stats} />
 
           <div className="games-section">
@@ -107,6 +159,8 @@ export function UploadPage() {
           </div>
         </>
       )}
+
+      <UploadHistoryList />
     </main>
   );
 }

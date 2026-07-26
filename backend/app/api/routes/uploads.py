@@ -1,6 +1,19 @@
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+import uuid
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import get_db
+from app.repositories import games as game_repo
+from app.repositories import uploads as upload_repo
+from app.schemas.library import (
+    GameSummaryOut,
+    PaginatedGameSummariesOut,
+    PaginatedUploadsOut,
+    UploadListItemOut,
+    UploadOut,
+)
 from app.schemas.upload import (
     GameOut,
     MoveOut,
@@ -8,17 +21,20 @@ from app.schemas.upload import (
     UploadPreviewResponse,
     UploadStatsOut,
 )
+from app.services.import_service import (
+    DuplicateUploadError,
+    InvalidEncodingError,
+    NoValidGamesError,
+    import_pgn,
+)
+from app.services.library_stats import compute_upload_stats
 from app.services.pgn_parser import parse_pgn_text
 from app.services.statistics import compute_stats
 
 router = APIRouter()
 
 
-@router.post("/uploads/preview", response_model=UploadPreviewResponse)
-async def preview_upload(
-    file: UploadFile,
-    player_name: str = Form(""),
-) -> UploadPreviewResponse:
+async def _read_validated_file(file: UploadFile) -> bytes:
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file was uploaded.")
 
@@ -29,6 +45,16 @@ async def preview_upload(
 
     if len(raw_bytes) > settings.max_upload_size_bytes:
         raise HTTPException(status_code=413, detail="Uploaded file is too large.")
+
+    return raw_bytes
+
+
+@router.post("/uploads/preview", response_model=UploadPreviewResponse)
+async def preview_upload(
+    file: UploadFile,
+    player_name: str = Form(""),
+) -> UploadPreviewResponse:
+    raw_bytes = await _read_validated_file(file)
 
     try:
         pgn_text = raw_bytes.decode("utf-8")
@@ -91,3 +117,121 @@ async def preview_upload(
     return UploadPreviewResponse(
         games=games_out, stats=stats_out, warnings=parse_result.warnings
     )
+
+
+@router.post("/uploads", response_model=UploadOut, status_code=201)
+async def import_upload(
+    file: UploadFile,
+    player_name: str = Form(...),
+    db: Session = Depends(get_db),
+) -> UploadOut:
+    if not player_name.strip():
+        raise HTTPException(status_code=400, detail="player_name is required.")
+
+    raw_bytes = await _read_validated_file(file)
+
+    try:
+        upload = import_pgn(
+            db,
+            original_filename=file.filename,
+            raw_bytes=raw_bytes,
+            player_name=player_name,
+        )
+    except DuplicateUploadError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "This file has already been imported for this player.",
+                "existing_upload_id": str(exc.existing_upload_id),
+            },
+        ) from exc
+    except NoValidGamesError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InvalidEncodingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return UploadOut.model_validate(upload)
+
+
+@router.get("/uploads", response_model=PaginatedUploadsOut)
+def list_uploads(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> PaginatedUploadsOut:
+    items, total = upload_repo.list_uploads(db, page=page, page_size=page_size)
+    return PaginatedUploadsOut(
+        items=[UploadListItemOut.model_validate(item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.get("/uploads/{upload_id}", response_model=UploadOut)
+def get_upload(upload_id: uuid.UUID, db: Session = Depends(get_db)) -> UploadOut:
+    upload = upload_repo.get_upload(db, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    return UploadOut.model_validate(upload)
+
+
+@router.get("/uploads/{upload_id}/stats", response_model=UploadStatsOut)
+def get_upload_stats(upload_id: uuid.UUID, db: Session = Depends(get_db)) -> UploadStatsOut:
+    upload = upload_repo.get_upload(db, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+
+    games = game_repo.list_all_games(db, upload_id)
+    stats = compute_upload_stats(games, upload.player_name)
+
+    return UploadStatsOut(
+        total_games=stats.total_games,
+        wins=stats.wins,
+        draws=stats.draws,
+        losses=stats.losses,
+        unknown_results=stats.unknown_results,
+        win_percentage=stats.win_percentage,
+        score_percentage=stats.score_percentage,
+        games_as_white=stats.games_as_white,
+        games_as_black=stats.games_as_black,
+        openings=[
+            OpeningStatOut(
+                name=opening.name,
+                games=opening.games,
+                wins=opening.wins,
+                draws=opening.draws,
+                losses=opening.losses,
+                score_percentage=opening.score_percentage,
+            )
+            for opening in stats.openings
+        ],
+    )
+
+
+@router.get("/uploads/{upload_id}/games", response_model=PaginatedGameSummariesOut)
+def get_upload_games(
+    upload_id: uuid.UUID,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> PaginatedGameSummariesOut:
+    upload = upload_repo.get_upload(db, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+
+    items, total = game_repo.list_game_summaries(db, upload_id, page=page, page_size=page_size)
+    return PaginatedGameSummariesOut(
+        items=[GameSummaryOut.model_validate(item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.delete("/uploads/{upload_id}", status_code=204)
+def delete_upload(upload_id: uuid.UUID, db: Session = Depends(get_db)) -> None:
+    upload = upload_repo.get_upload(db, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+    upload_repo.delete_upload(db, upload)

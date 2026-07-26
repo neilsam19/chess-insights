@@ -2,6 +2,8 @@ from pydantic import BaseModel
 
 
 class MoveOut(BaseModel):
+    model_config = {"from_attributes": True}
+
     ply: int
     san: str
     uci: str

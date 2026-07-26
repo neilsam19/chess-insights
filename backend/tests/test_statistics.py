@@ -18,10 +18,13 @@ def make_game(
         black_elo=None,
         date=None,
         event=None,
+        site=None,
+        round=None,
         result=result,
         eco=eco,
         opening=opening,
         moves=[],
+        raw_pgn="",
     )
 
 

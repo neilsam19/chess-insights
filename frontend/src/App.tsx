@@ -1,8 +1,17 @@
 import "./App.css";
-import { UploadPage } from "./pages/UploadPage";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { HomePage } from "./pages/HomePage";
+import { SavedDashboardPage } from "./pages/SavedDashboardPage";
 
 function App() {
-  return <UploadPage />;
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<HomePage />} />
+        <Route path="/uploads/:uploadId" element={<SavedDashboardPage />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
 
 export default App;

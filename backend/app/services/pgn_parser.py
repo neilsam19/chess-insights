@@ -21,10 +21,13 @@ class ParsedGame:
     black_elo: int | None
     date: str | None
     event: str | None
+    site: str | None
+    round: str | None
     result: str
     eco: str | None
     opening: str | None
     moves: list[ParsedMove]
+    raw_pgn: str
 
 
 @dataclass
@@ -110,6 +113,8 @@ def _convert_game(game: chess.pgn.Game) -> ParsedGame:
             )
         )
 
+    raw_pgn = game.accept(chess.pgn.StringExporter(headers=True, variations=True, comments=True))
+
     return ParsedGame(
         white=headers.get("White", "Unknown"),
         black=headers.get("Black", "Unknown"),
@@ -117,8 +122,11 @@ def _convert_game(game: chess.pgn.Game) -> ParsedGame:
         black_elo=_parse_optional_int(headers.get("BlackElo")),
         date=_clean_placeholder(headers.get("Date")),
         event=_clean_placeholder(headers.get("Event")),
+        site=_clean_placeholder(headers.get("Site")),
+        round=_clean_placeholder(headers.get("Round")),
         result=headers.get("Result", "*"),
         eco=headers.get("ECO"),
         opening=headers.get("Opening"),
         moves=moves,
+        raw_pgn=raw_pgn,
     )
