@@ -1,0 +1,13 @@
+{
+  "source": "https://github.com/lichess-org/chess-openings",
+  "source_commit": "51b886249b9e418498d25b6e39b926c3de99c29a",
+  "license": "CC0-1.0",
+  "retrieved": "2026-07-26",
+  "source_rows": 3807,
+  "index_rows": 3807,
+  "identical_duplicate_rows": 0,
+  "conflicting_epds": 0,
+  "epd_generator": "app.services.epd.board_epd (python-chess Board.epd, en_passant=legal)",
+  "collision_policy": "lowest ply, then eco, then name",
+  "regenerate": "python scripts/build_opening_index.py --sha <source_commit>"
+}
