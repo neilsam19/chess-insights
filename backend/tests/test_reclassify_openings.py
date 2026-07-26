@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -10,8 +8,7 @@ from app.scripts import reclassify_openings
 from app.scripts.reclassify_openings import reclassify_all
 from app.services.opening_dataset import load_opening_index
 
-SAMPLE_DATA_PATH = Path(__file__).resolve().parents[2] / "sample-data" / "sample-games.pgn"
-SAMPLE_PGN_BYTES = SAMPLE_DATA_PATH.read_bytes()
+from sample_data import SAMPLE_PGN_BYTES
 
 
 def _import(client: TestClient, player_name: str = "NeilSamant") -> dict:

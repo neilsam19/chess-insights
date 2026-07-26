@@ -1,12 +1,9 @@
-from pathlib import Path
-
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.models.game import Game
 
-SAMPLE_DATA_PATH = Path(__file__).resolve().parents[2] / "sample-data" / "sample-games.pgn"
-SAMPLE_PGN_BYTES = SAMPLE_DATA_PATH.read_bytes()
+from sample_data import SAMPLE_PGN_BYTES
 
 WRONG_HEADERS = """[Event "Casual Game"]
 [White "NeilSamant"]

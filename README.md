@@ -4,7 +4,7 @@
 
 A personalized chess analytics platform that turns a player's game history into opening trends, recurring patterns, and (eventually) engine-backed insights.
 
-Built incrementally in small, verified sprints rather than all at once. Current status: **Sprint 2 complete** - PGN uploads are now permanently saved to PostgreSQL and browsable as an "Analysis History," on top of the original stateless upload/preview flow from Sprint 1.
+Built incrementally in small, verified sprints rather than all at once. Current status: **Sprint 3 complete** - openings are now identified from the positions actually played (via a vendored Lichess opening dataset) rather than from unreliable PGN headers, on top of the PostgreSQL-backed "Analysis History" from Sprint 2 and the stateless upload/preview flow from Sprint 1.
 
 ## What it does today
 
@@ -21,6 +21,58 @@ There are two distinct upload endpoints, on purpose:
 
 - **`POST /api/uploads/preview`** - stateless. Parses the file and returns stats + every game so you can pick your name and look before committing. Nothing is written to the database. You can preview the same file as many times as you want.
 - **`POST /api/uploads`** - the confirmed "Save analysis" action. Parses the file again (parsing twice is cheap at this scale and avoids staging tables), hashes the file, and permanently persists the upload + every game + every move in one all-or-nothing transaction. Uploading the exact same file under the exact same player name twice returns `409 Conflict` with the existing upload's id, rather than creating a duplicate - but the same file *can* be re-imported under a different player's name (useful for analyzing the same games from the opponent's perspective).
+
+## Opening classification
+
+Openings are identified from the **positions actually reached** in a game, not
+from the PGN's `ECO`/`Opening` headers. Every position in a game is normalized
+to an EPD and looked up against a vendored snapshot of the Lichess opening
+dataset, walking backwards from the deepest position until a named opening
+matches. This means openings are correct even when a PGN has no opening
+headers, has wrong ones, or reaches a line by transposition.
+
+Precedence is strict: **dataset position match → PGN header fallback →
+unknown**. A header can never override a real position match.
+
+### Dataset attribution
+
+Opening names and ECO codes come from
+[lichess-org/chess-openings](https://github.com/lichess-org/chess-openings),
+released under the **CC0 1.0 Public Domain Dedication**. A fixed snapshot is
+vendored in `backend/app/data/openings/` (source TSVs plus `COPYING.txt`); the
+exact upstream commit is recorded in `MANIFEST.json`. Nothing is downloaded at
+runtime and classification never contacts an external service.
+
+The searchable index (`openings_index.tsv`) is generated from those TSVs, with
+each opening's EPD derived using the same function the classifier applies to
+game positions — so the two representations cannot drift apart. To move to a
+newer snapshot:
+
+```powershell
+git clone --depth 1 https://github.com/lichess-org/chess-openings ..\chess-openings-snapshot
+copy ..\chess-openings-snapshot\*.tsv backend\app\data\openings\
+cd backend
+python scripts\build_opening_index.py --sha <upstream commit sha>
+python -m app.scripts.reclassify_openings   # re-classify already-saved games
+```
+
+Updating the dataset is a deliberate, reviewable code change, never an
+uncontrolled runtime change.
+
+### Reclassifying saved analyses
+
+Analyses saved before an opening-dataset change can be updated in place,
+without re-uploading any PGN:
+
+```powershell
+cd backend
+python -m app.scripts.reclassify_openings --dry-run   # report only
+python -m app.scripts.reclassify_openings             # apply
+```
+
+It is idempotent (re-running changes nothing), writes only opening metadata,
+and commits one upload at a time. `--force` re-examines every game rather than
+only those from an older snapshot; `--upload <id>` restricts it to one upload.
 
 ## Tech stack
 
@@ -139,6 +191,7 @@ left behind in your dev database).
 Frontend (from `frontend/`):
 
 ```powershell
+npm test
 npm run build
 npm run lint
 ```
@@ -148,9 +201,9 @@ npm run lint
 Deliberately out of scope for now, planned for later sprints:
 
 - No engine analysis (Stockfish) or move-quality classification
-- Opening names beyond what a PGN's own `ECO`/`Opening` headers provide (no
-  Lichess opening-name dataset integration yet - a bare ECO code like `B90`
-  is shown as `ECO B90` rather than resolved to a full name)
+- No family-level opening rollups (openings are grouped by their full canonical
+  name, so `Sicilian Defense: Najdorf Variation` and
+  `Sicilian Defense: Najdorf Variation, English Attack` count separately)
 - No authentication - all saved uploads are visible to anyone using the app
 - No generative-AI explanations
 - No deployment/production setup - local development only

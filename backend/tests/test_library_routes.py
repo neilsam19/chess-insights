@@ -1,5 +1,4 @@
 import uuid
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -8,8 +7,7 @@ from app.models.game import Game
 from app.models.move import Move
 from app.models.upload import Upload
 
-SAMPLE_DATA_PATH = Path(__file__).resolve().parents[2] / "sample-data" / "sample-games.pgn"
-SAMPLE_PGN_BYTES = SAMPLE_DATA_PATH.read_bytes()
+from sample_data import SAMPLE_PGN_BYTES
 
 
 def _import(client: TestClient, player_name: str) -> dict:

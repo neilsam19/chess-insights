@@ -1,5 +1,4 @@
 import socket
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,9 +10,7 @@ from app.models.upload import Upload
 from app.services.opening_dataset import load_opening_index
 from app.services.pgn_parser import parse_pgn_text
 
-SAMPLE_DATA_PATH = Path(__file__).resolve().parents[2] / "sample-data" / "sample-games.pgn"
-SAMPLE_PGN_BYTES = SAMPLE_DATA_PATH.read_bytes()
-SAMPLE_PGN_TEXT = SAMPLE_DATA_PATH.read_text(encoding="utf-8")
+from sample_data import SAMPLE_PGN_BYTES, SAMPLE_PGN_TEXT
 
 # A game whose PGN headers are simply absent - classification must not
 # depend on them.

@@ -1,5 +1,4 @@
 import hashlib
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,8 +10,7 @@ from app.models.upload import Upload
 from app.services import import_service
 from app.services.import_service import DuplicateUploadError, import_pgn
 
-SAMPLE_DATA_PATH = Path(__file__).resolve().parents[2] / "sample-data" / "sample-games.pgn"
-SAMPLE_PGN_BYTES = SAMPLE_DATA_PATH.read_bytes()
+from sample_data import SAMPLE_PGN_BYTES
 
 
 def test_import_persists_upload_games_and_moves(client: TestClient, db_session) -> None:
