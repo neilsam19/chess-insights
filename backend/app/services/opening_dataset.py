@@ -44,6 +44,10 @@ class OpeningRecord:
 class OpeningIndex:
     by_epd: Mapping[str, OpeningRecord]
     dataset_version: str
+    max_ply: int
+    """Deepest line in the dataset. A position beyond this can't be a named
+    opening, so the classifier's backward walk starts here instead of at the
+    end of a long game."""
 
     def lookup(self, epd: str) -> OpeningRecord | None:
         return self.by_epd.get(epd)
@@ -127,7 +131,11 @@ def load_index_from(index_path: Path, manifest_path: Path) -> OpeningIndex:
     if not by_epd:
         raise OpeningDatasetError(f"opening index contains no records: {index_path}")
 
-    return OpeningIndex(by_epd=MappingProxyType(by_epd), dataset_version=dataset_version)
+    return OpeningIndex(
+        by_epd=MappingProxyType(by_epd),
+        dataset_version=dataset_version,
+        max_ply=max(record.ply for record in by_epd.values()),
+    )
 
 
 @functools.lru_cache(maxsize=1)
