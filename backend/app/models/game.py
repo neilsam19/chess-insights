@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.analysis_run import AnalysisRun
     from app.models.move import Move
     from app.models.upload import Upload
 
@@ -49,4 +50,9 @@ class Game(Base):
         back_populates="game",
         cascade="all, delete-orphan",
         order_by="Move.ply",
+    )
+    analysis_runs: Mapped[list["AnalysisRun"]] = relationship(
+        back_populates="game",
+        cascade="all, delete-orphan",
+        order_by="AnalysisRun.created_at",
     )
