@@ -220,18 +220,41 @@ describe("analysis in the game viewer", () => {
     expect(await screen.findByRole("img", { name: /Evaluation graph/ })).toBeInTheDocument();
   });
 
-  it("does not invert scores the backend already put in player perspective", async () => {
-    // Backend says perspective=black and has already negated the values.
+  it("displays the canonical White score, not the player-relative one", async () => {
+    // A game the user played as Black: the backend supplies both a
+    // player-relative score (-1.50) and the canonical White score (+1.50).
+    // Standard engine convention means the graph shows White's view, so a
+    // number reads the same way in every game.
+    const playerRelative: PositionEvaluation = {
+      ply: 0,
+      score: { type: "cp", value: -150 },
+      white_score: { type: "cp", value: 150 },
+      best_move_uci: "e2e4",
+      depth_reached: 12,
+      nodes: 1000,
+      time_ms: 5,
+    };
     vi.mocked(analysisApi.getGameAnalysis).mockResolvedValue({
-      ...completeAnalysis([evaluation(0, { type: "cp", value: -150 })]),
+      ...completeAnalysis([playerRelative]),
       perspective: "black",
     } as GameAnalysis);
 
     render(<ChessGameViewer game={savedGame()} gameId={GAME_ID} />);
 
-    expect(await screen.findByText("-1.50")).toBeInTheDocument();
-    expect(screen.queryByText("+1.50")).not.toBeInTheDocument();
-    expect(screen.getByText(/Black perspective/)).toBeInTheDocument();
+    expect(await screen.findByText("+1.50")).toBeInTheDocument();
+    expect(screen.queryByText("-1.50")).not.toBeInTheDocument();
+  });
+
+  it("does not label the graph with a per-game perspective", async () => {
+    vi.mocked(analysisApi.getGameAnalysis).mockResolvedValue({
+      ...completeAnalysis(),
+      perspective: "black",
+    } as GameAnalysis);
+
+    render(<ChessGameViewer game={savedGame()} gameId={GAME_ID} />);
+
+    expect(await screen.findByText(/favours White/)).toBeInTheDocument();
+    expect(screen.queryByText(/Black perspective/)).not.toBeInTheDocument();
   });
 
   it("still lets the move list drive the board", async () => {

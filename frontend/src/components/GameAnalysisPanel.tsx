@@ -141,10 +141,15 @@ function CompleteAnalysis({
 
   return (
     <>
+      {/* Canonical White-perspective values, matching standard engine
+          convention - the player-relative `score` is left for Sprint 6's
+          move-quality work. */}
       <div className="analysis-current">
-        <span className="analysis-score">{current ? formatScore(current.score) : "-"}</span>
+        <span className="analysis-score">
+          {current ? formatScore(current.white_score) : "-"}
+        </span>
         <span className="analysis-note">
-          {current ? describeScore(current.score) : ""}
+          {current ? describeScore(current.white_score) : ""}
           {current ? ` at ${plyLabel(current.ply)}` : ""}
         </span>
       </div>
@@ -159,7 +164,7 @@ function CompleteAnalysis({
         {analysis.engine.name}
         {analysis.engine.version ? ` ${analysis.engine.version}` : ""}
         {` · depth ${analysis.engine.requested_depth}`}
-        {` · ${analysis.perspective === "black" ? "Black" : "White"} perspective`}
+        {" · standard engine convention (+ favours White)"}
       </p>
     </>
   );

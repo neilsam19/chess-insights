@@ -33,6 +33,11 @@ export function describeScore(score: EvaluationScore): string {
 /**
  * Y values for plotting, in pawn units.
  *
+ * Uses `white_score`, the canonical engine convention: positive favours
+ * White regardless of which side the saved player was. This matches every
+ * other chess tool, so a number means the same thing in every game. The
+ * player-relative `score` stays on the wire for later move-quality work.
+ *
  * Centipawn scores are clamped so one lost queen doesn't flatten the rest of
  * the game; mate is pinned to a band beyond that range so it reads as
  * categorically different rather than just "very large".
@@ -44,7 +49,7 @@ export function toGraphValues(evaluations: PositionEvaluation[]): number[] {
   let previous = 0;
 
   return evaluations.map((evaluation) => {
-    const score = evaluation.score;
+    const score = evaluation.white_score;
     let value: number;
 
     if (score.type === "mate") {

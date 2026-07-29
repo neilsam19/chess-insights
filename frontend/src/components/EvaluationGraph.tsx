@@ -49,7 +49,7 @@ export function EvaluationGraph({
       className="evaluation-graph"
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       role="img"
-      aria-label={`Evaluation graph across ${evaluations.length} positions`}
+      aria-label={`Evaluation graph across ${evaluations.length} positions, positive favours White`}
     >
       <polygon className="evaluation-graph-area" points={areaPoints} />
 
@@ -94,7 +94,7 @@ export function EvaluationGraph({
           height={HEIGHT}
           onClick={() => onSelectPly?.(evaluation.ply)}
         >
-          <title>{`${plyLabel(evaluation.ply)} ${describeScore(evaluation.score)}`}</title>
+          <title>{`${plyLabel(evaluation.ply)} ${describeScore(evaluation.white_score)}`}</title>
         </rect>
       ))}
     </svg>
