@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import games, health, uploads
+from app.api.routes import engine, games, health, uploads
 
 app = FastAPI(title="Chess Insights API")
 
@@ -16,3 +16,4 @@ app.add_middleware(
 app.include_router(health.router, prefix="/api")
 app.include_router(uploads.router, prefix="/api")
 app.include_router(games.router, prefix="/api")
+app.include_router(engine.router, prefix="/api")
