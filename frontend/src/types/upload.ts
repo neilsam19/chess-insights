@@ -11,6 +11,11 @@ export type PlayerResult = "win" | "draw" | "loss" | "unknown";
 
 export interface Game {
   index: number;
+  /**
+   * Persistent database id. Absent for preview games, which exist only in
+   * the response body and can never be analyzed.
+   */
+  id?: string;
   white: string;
   black: string;
   white_elo: number | null;

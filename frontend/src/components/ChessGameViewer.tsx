@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Chessboard } from "react-chessboard";
 import type { Game } from "../types/upload";
+import { GameAnalysisPanel } from "./GameAnalysisPanel";
 import { MoveList } from "./MoveList";
 import { OpeningLabel } from "./OpeningLabel";
 
@@ -8,9 +9,15 @@ const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 interface ChessGameViewerProps {
   game: Game;
+  /**
+   * Persisted game id. Supplied only for saved games - preview games have no
+   * id, so the analysis section never appears there and preview stays
+   * entirely stateless.
+   */
+  gameId?: string;
 }
 
-export function ChessGameViewer({ game }: ChessGameViewerProps) {
+export function ChessGameViewer({ game, gameId }: ChessGameViewerProps) {
   const [currentPly, setCurrentPly] = useState(0);
   const [orientation, setOrientation] = useState<"white" | "black">(
     game.player_color === "black" ? "black" : "white",
@@ -78,6 +85,17 @@ export function ChessGameViewer({ game }: ChessGameViewerProps) {
           Flip board
         </button>
       </div>
+
+      {/* Rendered inside the viewer so the graph shares currentPly directly,
+          rather than lifting board state into every page that shows a game. */}
+      {gameId && (
+        <GameAnalysisPanel
+          key={gameId}
+          gameId={gameId}
+          currentPly={currentPly}
+          onSelectPly={setCurrentPly}
+        />
+      )}
     </div>
   );
 }

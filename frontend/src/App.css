@@ -186,6 +186,114 @@
   margin-top: -6px;
 }
 
+/* --- Engine analysis --- */
+
+.analysis-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.analysis-panel h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.analysis-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.analysis-note {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.analysis-current {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.analysis-score {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.analysis-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: analysis-spin 0.8s linear infinite;
+}
+
+@keyframes analysis-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .analysis-spinner {
+    animation: none;
+  }
+}
+
+.evaluation-graph {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.evaluation-graph-area {
+  fill: var(--accent-bg);
+}
+
+.evaluation-graph-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.evaluation-graph-zero {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.evaluation-graph-cursor {
+  stroke: var(--accent-border);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.evaluation-graph-point {
+  fill: var(--accent);
+}
+
+.evaluation-graph-hit {
+  fill: transparent;
+  cursor: pointer;
+}
+
 .game-viewer {
   flex: 1 1 420px;
   display: flex;

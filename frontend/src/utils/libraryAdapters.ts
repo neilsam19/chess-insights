@@ -9,6 +9,7 @@ import type { Game } from "../types/upload";
 export function gameFromSummary(summary: GameSummary): Game {
   return {
     index: summary.game_index,
+    id: summary.id,
     white: summary.white_name,
     black: summary.black_name,
     white_elo: summary.white_elo,
@@ -29,6 +30,7 @@ export function gameFromSummary(summary: GameSummary): Game {
 export function gameFromDetail(detail: GameDetail): Game {
   return {
     index: detail.game_index,
+    id: detail.id,
     white: detail.white_name,
     black: detail.black_name,
     white_elo: detail.white_elo,

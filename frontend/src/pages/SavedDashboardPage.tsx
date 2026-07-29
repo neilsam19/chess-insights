@@ -187,7 +187,11 @@ export function SavedDashboardPage() {
           </p>
         )}
         {!isLoadingGame && selectedGame && (
-          <ChessGameViewer key={selectedGame.index} game={selectedGame} />
+          <ChessGameViewer
+            key={selectedGame.id ?? selectedGame.index}
+            game={selectedGame}
+            gameId={selectedGame.id}
+          />
         )}
       </div>
     </main>
