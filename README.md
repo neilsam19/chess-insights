@@ -4,7 +4,7 @@
 
 A personalized chess analytics platform that turns a player's game history into opening trends, recurring patterns, and (eventually) engine-backed insights.
 
-Built incrementally in small, verified sprints rather than all at once. Current status: **Sprint 3 complete** - openings are now identified from the positions actually played (via a vendored Lichess opening dataset) rather than from unreliable PGN headers, on top of the PostgreSQL-backed "Analysis History" from Sprint 2 and the stateless upload/preview flow from Sprint 1.
+Built incrementally in small, verified sprints rather than all at once. Current status: **Sprint 4 complete** - a saved game can now be analysed by Stockfish, with per-position evaluations persisted and drawn as an evaluation graph, on top of position-based opening classification from Sprint 3, the PostgreSQL-backed "Analysis History" from Sprint 2, and the stateless upload/preview flow from Sprint 1.
 
 ## What it does today
 
@@ -73,6 +73,61 @@ python -m app.scripts.reclassify_openings             # apply
 It is idempotent (re-running changes nothing), writes only opening metadata,
 and commits one upload at a time. `--force` re-examines every game rather than
 only those from an older snapshot; `--upload <id>` restricts it to one upload.
+
+## Engine analysis
+
+A saved game can be analysed by Stockfish: every position from the starting
+position through the final move is evaluated, and the results are persisted so
+they survive restarts. Open a saved analysis, select a game, and press
+**Analyze Game**.
+
+Preview games are deliberately *not* analysable - analysis needs a persisted
+game to attach results to, so the action only appears once an upload is saved.
+
+Evaluations follow **standard engine convention: positive favours White**,
+regardless of which side you played. Centipawn and mate scores stay distinct
+(`+0.74`, `M3`, `Checkmate`) - mate is never flattened into a large fake
+centipawn number.
+
+Analysis is synchronous for now: the request stays open until the game
+finishes, which is fine for one game at a time. Background jobs, bulk
+analysis, and cancellation are a later sprint.
+
+### Installing Stockfish
+
+Stockfish is a binary dependency and is **not** installed by `pip`. Download a
+build from [stockfishchess.org/download](https://stockfishchess.org/download/),
+unzip it somewhere stable, and point `backend/.env` at it:
+
+```
+STOCKFISH_PATH=C:\tools\stockfish\stockfish-windows-x86-64-avx2.exe
+STOCKFISH_DEPTH=12
+STOCKFISH_THREADS=1
+STOCKFISH_HASH_MB=64
+```
+
+No quotes are needed even if the path contains spaces. Pick the most specific
+build your CPU supports (`avx2` or `bmi2` are considerably faster than the
+`sse41-popcnt` compatibility build).
+
+The executable path is read from configuration only - never from `PATH`, and
+never from a client request. To confirm the binary works before starting the
+app:
+
+```powershell
+echo uci | & "C:\tools\stockfish\stockfish-windows-x86-64-avx2.exe"
+```
+
+A `Stockfish ...` banner followed by `uciok` means it's good. With the backend
+running, `GET http://localhost:8001/api/engine/status` reports the same thing:
+
+```json
+{ "available": true, "engine_name": "Stockfish", "engine_version": "17", "configured_depth": 12 }
+```
+
+If `STOCKFISH_PATH` is unset or wrong, analysis requests return `503` with an
+explanation and no analysis run is recorded - a misconfigured server is not a
+failed analysis.
 
 ## Tech stack
 
@@ -188,6 +243,18 @@ and integration tests that run against the **real** Postgres instance
 (wrapped in a transaction that's rolled back after each test, so nothing is
 left behind in your dev database).
 
+Engine tests use a fake in-memory engine, so **the suite does not require
+Stockfish**. The tests that exercise the real binary are marked and skipped
+unless `STOCKFISH_PATH` is set:
+
+```powershell
+pytest -m stockfish_integration      # only the real-engine tests
+pytest -m "not stockfish_integration"  # everything else
+```
+
+Without an engine configured you should see `175 passed, 5 skipped`; with one,
+`180 passed`.
+
 Frontend (from `frontend/`):
 
 ```powershell
@@ -200,7 +267,11 @@ npm run lint
 
 Deliberately out of scope for now, planned for later sprints:
 
-- No engine analysis (Stockfish) or move-quality classification
+- No move-quality classification - evaluations are stored, but centipawn loss,
+  accuracy, and blunder/mistake labels are not derived from them yet
+- No bulk analysis: one game at a time, synchronously. There are no background
+  jobs, queues, progress tracking, cancellation, or resumability, so a run left
+  as `running` by a killed backend stays that way
 - No family-level opening rollups (openings are grouped by their full canonical
   name, so `Sicilian Defense: Najdorf Variation` and
   `Sicilian Defense: Najdorf Variation, English Attack` count separately)
