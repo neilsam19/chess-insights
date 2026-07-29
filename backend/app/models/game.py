@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.analysis_job import AnalysisJob
     from app.models.analysis_run import AnalysisRun
     from app.models.move import Move
     from app.models.upload import Upload
@@ -55,4 +56,9 @@ class Game(Base):
         back_populates="game",
         cascade="all, delete-orphan",
         order_by="AnalysisRun.created_at",
+    )
+    analysis_jobs: Mapped[list["AnalysisJob"]] = relationship(
+        back_populates="game",
+        cascade="all, delete-orphan",
+        order_by="AnalysisJob.created_at",
     )

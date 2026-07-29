@@ -117,18 +117,39 @@ must not spawn Stockfish or re-read a ~50 MB binary on every request.
 The hash is cached on `(path, mtime, size)`, so it is computed once per process
 per binary and recomputed automatically if the executable is replaced.
 
-**Canonical config hash.** Serialize to JSON with sorted keys and no
-whitespace, then SHA-256 the UTF-8 bytes:
+**Canonical config hash, in two layers.** Serialize to JSON with sorted keys
+and no whitespace, then SHA-256 the UTF-8 bytes.
+
+*Engine config hash* — identity of a configuration, independent of any game.
+Stored on `analysis_batches.engine_config_hash`:
 
 ```json
 {
   "behavior_version": 1,
   "depth": 12,
   "engine_binary_sha256": "<hex>",
-  "game_hash": "<games.game_hash>",
   "options": {"Hash": 64, "Threads": 1}
 }
 ```
+
+*Job config hash* — that configuration applied to one game. Stored on
+`analysis_jobs.config_hash`:
+
+```json
+{
+  "engine_config_hash": "<hex>",
+  "game_hash": "<games.game_hash>"
+}
+```
+
+**Amended during CP1.** This was originally specified as a single hash with
+`game_hash` folded in. That does not work: a batch spans many games and so
+needs an identity of its own, which a game-specific hash cannot express.
+Splitting it also means the second layer is structured JSON rather than string
+concatenation, so `("ab", "c")` and `("a", "bc")` cannot collide.
+
+The executable *path* is deliberately not an input — moving the same binary
+must not invalidate existing analyses. The digest identifies the build.
 
 `ANALYSIS_BEHAVIOR_VERSION` starts at `1` and is bumped whenever a change would
 alter how a stored evaluation should be interpreted. `games.game_hash` already
@@ -158,6 +179,21 @@ All idempotency moves to two places and only these two:
 
 The three-short-transaction shape documented at the top of
 `game_analysis_service.py` is preserved. Only the decision-making is removed.
+
+### D4a — No `latest_run_id` pointer on jobs (amended during CP1)
+
+The original data model put a `latest_run_id` column on `analysis_jobs`. It is
+not implemented, for two reasons:
+
+- It creates a circular foreign key (`analysis_runs.analysis_job_id` →
+  `analysis_jobs`, and back), which complicates migration ordering for no
+  functional gain.
+- It is a denormalization that can drift from the run history it summarizes,
+  and D4 has just finished removing a *different* second source of truth.
+
+A job's latest attempt is derived from `analysis_runs` ordered by
+`(analysis_job_id, attempt_number)`, which
+`ix_analysis_runs_job_id_attempt` makes cheap.
 
 ### D5 — Runs gain a `cancelled` state
 

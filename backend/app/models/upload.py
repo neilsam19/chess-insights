@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
 if TYPE_CHECKING:
+    from app.models.analysis_batch import AnalysisBatch
     from app.models.game import Game
 
 
@@ -31,4 +32,9 @@ class Upload(Base):
         back_populates="upload",
         cascade="all, delete-orphan",
         order_by="Game.game_index",
+    )
+    analysis_batches: Mapped[list["AnalysisBatch"]] = relationship(
+        back_populates="upload",
+        cascade="all, delete-orphan",
+        order_by="AnalysisBatch.created_at",
     )

@@ -57,6 +57,23 @@ class EngineIdentity:
 
 
 @dataclass(frozen=True)
+class EngineConfig:
+    """Everything needed to identify an analysis configuration, resolved
+    without starting a subprocess.
+
+    The enqueue path needs to answer "is the engine usable, and what is this
+    configuration's identity?" on every request. Launching Stockfish to find
+    out would be absurd, so path validation and binary hashing are separated
+    from actually running the engine.
+    """
+
+    path: str
+    binary_sha256: str | None
+    options: dict[str, object]
+    depth: int
+
+
+@dataclass(frozen=True)
 class RawEvaluation:
     score_cp_white: int | None
     mate_in_white: int | None
@@ -118,6 +135,60 @@ def _hash_binary(path: Path) -> str | None:
         return digest.hexdigest()
     except OSError:
         return None
+
+
+# Hashing a ~50 MB executable on every enqueue would be silly, so the digest is
+# cached per (path, mtime, size). Replacing the binary changes at least one of
+# those, so a new build is picked up automatically rather than being served a
+# stale hash - which matters, because the hash is part of analysis identity.
+_binary_hash_cache: dict[tuple[str, int, int], str | None] = {}
+
+
+def _cached_binary_hash(path: Path) -> str | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    if key not in _binary_hash_cache:
+        _binary_hash_cache[key] = _hash_binary(path)
+    return _binary_hash_cache[key]
+
+
+def _validated_engine_path() -> Path:
+    """The configured executable, or an explanation of why it is unusable.
+
+    Deliberately refuses to search PATH: the executable comes from
+    configuration only, never from a client and never from discovery.
+    """
+    if not settings.stockfish_path:
+        raise EngineUnavailableError(
+            "Engine analysis is not configured. Set STOCKFISH_PATH to a Stockfish executable."
+        )
+
+    path = Path(settings.stockfish_path)
+    if not path.exists():
+        raise EngineUnavailableError("The configured engine executable does not exist.")
+    if not path.is_file():
+        raise EngineUnavailableError("The configured engine path is not a file.")
+    return path
+
+
+def resolve_engine_config(depth: int | None = None) -> EngineConfig:
+    """Validate configuration and derive analysis identity - without spawning.
+
+    Raises `EngineUnavailableError` for a missing or unusable path, which the
+    API turns into 503 with no job created. Starting no process is the point:
+    this runs on every enqueue.
+    """
+    path = _validated_engine_path()
+    return EngineConfig(
+        path=str(path),
+        binary_sha256=_cached_binary_hash(path),
+        options={"Threads": settings.stockfish_threads, "Hash": settings.stockfish_hash_mb},
+        depth=depth if depth is not None else settings.stockfish_depth,
+    )
 
 
 class StockfishEngine:
@@ -196,27 +267,18 @@ class StockfishEngine:
 
 
 def build_stockfish_engine() -> StockfishEngine:
-    """Construct the configured engine, or explain why it isn't usable.
+    """Start the configured engine, or explain why it isn't usable.
 
-    Deliberately refuses to search PATH: the executable comes from
-    configuration only, never from a client and never from discovery.
+    Path validation and identity now come from `resolve_engine_config()`, so
+    the launcher and the enqueue path can never disagree about which binary or
+    options an analysis refers to.
     """
-    if not settings.stockfish_path:
-        raise EngineUnavailableError(
-            "Engine analysis is not configured. Set STOCKFISH_PATH to a Stockfish executable."
-        )
-
-    path = Path(settings.stockfish_path)
-    if not path.exists():
-        raise EngineUnavailableError("The configured engine executable does not exist.")
-    if not path.is_file():
-        raise EngineUnavailableError("The configured engine path is not a file.")
-
+    config = resolve_engine_config()
     return StockfishEngine(
-        str(path),
-        threads=settings.stockfish_threads,
-        hash_mb=settings.stockfish_hash_mb,
-        binary_sha256=_hash_binary(path),
+        config.path,
+        threads=int(config.options["Threads"]),
+        hash_mb=int(config.options["Hash"]),
+        binary_sha256=config.binary_sha256,
     )
 
 

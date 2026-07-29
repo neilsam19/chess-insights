@@ -222,3 +222,4 @@ __marimo__/
 # backend/alembic.ini, which left fresh clones unable to run migrations.
 sample-data/*.ini
 sprint3-pre-backfill.sql
+sprint5-pre-cp1.sql
