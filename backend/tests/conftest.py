@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from committed import CommittedWorld
 
 
 @pytest.fixture
@@ -41,3 +42,19 @@ def client(db_session: Session):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def committed_db():
+    """Real connections and real commits, for concurrency tests only.
+
+    The rollback fixture above cannot test `FOR UPDATE SKIP LOCKED`, because
+    two claimers sharing one transaction never contend. See tests/committed.py
+    for the full explanation and the rules for using this.
+    """
+    world = CommittedWorld()
+    try:
+        yield world
+    finally:
+        world.cleanup()
+    world.assert_clean()

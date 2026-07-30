@@ -254,6 +254,39 @@ States: `queued`, `running`, `complete`, `failed`, `cancelled`.
   through `queued`, so a retried job is claimed by the normal protocol and
   cannot skip the uniqueness check.
 
+### The run is created after the claim, not inside it (amended during CP2)
+
+The original claim protocol had the claim transaction also create the linked
+`analysis_run`. That is not implementable: `analysis_runs.engine_name` is
+`NOT NULL`, and the name only exists after `engine.identify()`, which requires
+a live Stockfish process. Creating the run inside the claim would mean starting
+the engine while holding the claim transaction open — precisely what invariant
+4 forbids.
+
+So the order is:
+
+1. **Claim transaction** — take the job, set the lease. Commit.
+2. Start the engine (no transaction held).
+3. **Run transaction** — create the `analysis_run` from the real engine
+   identity. Commit.
+4. Analyse (no transaction held).
+
+A job that is `running` with no run yet means the engine is still starting.
+A job whose engine never starts produces no run at all, which matches the
+Sprint 4 rule that a misconfigured server is a `503`, not a failed analysis.
+The stale sweep handles both cases: it fails the job, and the run too if one
+exists.
+
+### Manual retry is stricter than the transition table
+
+`ALLOWED_TRANSITIONS` permits `running → queued`, but that edge belongs to the
+stale sweep and automatic requeue, which act on jobs whose lease they own.
+`retry_job` additionally requires the job to be `failed` or `cancelled`.
+
+A user asking to retry a job that is running right now is asking for the wrong
+verb — they want cancel. Allowing it would silently abandon a live worker's
+run while that worker kept analysing.
+
 ### `cancel_requested_at` is a flag, not a state
 
 Cancellation takes `FOR UPDATE` on the job row and then:
