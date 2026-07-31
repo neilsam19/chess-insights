@@ -25,10 +25,16 @@ class FakeEngine:
         evaluations: list[RawEvaluation] | None = None,
         fail_on_call: int | None = None,
         fail_on_identify: bool = False,
+        on_evaluate=None,
     ) -> None:
         self._evaluations = evaluations
         self._fail_on_call = fail_on_call
         self._fail_on_identify = fail_on_identify
+        # Called with the 1-based call number before each evaluation. Lets a
+        # test observe the database from another connection at a moment when
+        # the engine is "thinking" - which is exactly when no transaction may
+        # be held open.
+        self._on_evaluate = on_evaluate
 
         self.closed = False
         self.close_count = 0
@@ -52,6 +58,9 @@ class FakeEngine:
     def evaluate(self, fen: str, depth: int) -> RawEvaluation:
         self.evaluated_fens.append(fen)
         self.depths.append(depth)
+
+        if self._on_evaluate is not None:
+            self._on_evaluate(self.call_count)
 
         if self._fail_on_call is not None and self.call_count == self._fail_on_call:
             raise EngineFailureError("fake engine died mid-analysis")

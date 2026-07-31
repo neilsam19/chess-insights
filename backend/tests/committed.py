@@ -36,6 +36,7 @@ from app.models.analysis_batch import AnalysisBatch
 from app.models.analysis_job import AnalysisJob
 from app.models.analysis_run import AnalysisRun
 from app.models.game import Game
+from app.models.move import Move
 from app.models.upload import Upload
 
 # Deliberately minimal fixtures: claim tests need a game row to point at, not a
@@ -100,6 +101,37 @@ class CommittedWorld:
         session.commit()
 
         self._upload_ids.append(upload.id)
+        return game
+
+    def create_game_with_moves(self, session: Session, *, move_count: int = 6) -> Game:
+        """A game the worker can actually analyze.
+
+        `create_game` is enough for claim tests, which never read positions.
+        The worker validates and replays stored FENs, so it needs real moves -
+        generated here rather than imported from a PGN, which would commit
+        thousands of rows for no benefit.
+        """
+        import chess
+
+        game = self.create_game(session, move_count=move_count)
+
+        board = chess.Board()
+        for ply in range(1, move_count + 1):
+            move = next(iter(board.legal_moves))
+            fen_before = board.fen()
+            san = board.san(move)
+            board.push(move)
+            session.add(
+                Move(
+                    game_id=game.id,
+                    ply=ply,
+                    san=san,
+                    uci=move.uci(),
+                    fen_before=fen_before,
+                    fen_after=board.fen(),
+                )
+            )
+        session.commit()
         return game
 
     def create_batch(self, session: Session, *, upload_id: uuid.UUID | None = None):

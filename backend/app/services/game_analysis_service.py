@@ -1,35 +1,44 @@
-"""Coordinates one complete engine analysis of one saved game.
+"""Synchronous analysis of one saved game - the Sprint 4 request path.
 
-Transaction shape is the point of this module. Upload import is a single
+This module is scheduled for deletion. Checkpoint 6 replaces the endpoint it
+serves with durable job creation, at which point the reuse and conflict rules
+below move to the enqueue layer for good (ADR decision D4). Until then it
+remains the only thing serving `POST /api/games/{id}/analysis`, so it keeps
+working exactly as it did in Sprint 4.
+
+What it no longer does is *execute* the analysis. Position loading and engine
+iteration live in `analysis_executor`, shared with the worker, so there is one
+implementation of the actual work even while two callers exist.
+
+Transaction shape is the point of what remains. Upload import is a single
 atomic transaction; engine analysis deliberately is not, because a database
-transaction must never stay open while Stockfish is thinking. Instead the run
-lifecycle is three short transactions:
+transaction must never stay open while Stockfish is thinking:
 
     1. create the run as "running"        (short, committed)
     2. ... analyze, holding no transaction ...
     3. save evaluations + mark complete   (short, committed)
        or mark failed                     (short, committed)
-
-Sessions come from an injected factory rather than `SessionLocal` directly, so
-tests can supply the rollback-scoped session from `conftest` and never leave
-rows behind in the developer's database.
 """
 
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, ContextManager, Iterator
+from typing import Callable, ContextManager
 
-import chess
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.analysis_run import STATUS_COMPLETE, STATUS_RUNNING
-from app.models.game import Game
-from app.models.move import Move
 from app.repositories import analysis as analysis_repo
+from app.services.analysis_executor import (
+    MAX_ERROR_MESSAGE_LENGTH,
+    AnalysisError,
+    GameNotFoundError,
+    InvalidGameDataError,
+    build_positions,
+    evaluate_positions,
+    load_game_positions,
+)
 from app.services.engine import (
     ChessEngine,
     EngineError,
@@ -40,20 +49,6 @@ from app.services.engine import (
 
 SessionFactory = Callable[[], ContextManager[Session]]
 EngineFactory = Callable[[], ChessEngine]
-
-MAX_ERROR_MESSAGE_LENGTH = 500
-
-
-class AnalysisError(Exception):
-    """Base class for analysis coordination problems."""
-
-
-class GameNotFoundError(AnalysisError):
-    pass
-
-
-class InvalidGameDataError(AnalysisError):
-    """Stored game data failed validation - the engine is never started."""
 
 
 class AnalysisAlreadyRunningError(AnalysisError):
@@ -73,48 +68,7 @@ def _default_session() -> ContextManager[Session]:
     return SessionLocal()
 
 
-def build_positions(game: Game, moves: list[Move]) -> list[str]:
-    """Ordered FENs for plies 0..N, taken from stored positions.
-
-    Uses the FENs recorded at import rather than replaying `raw_pgn`, so
-    analysis reflects exactly the positions the rest of the app displays.
-    Any inconsistency is a hard error - a partial or malformed move sequence
-    is never silently analyzed.
-    """
-    if not moves:
-        # Zero-move games are rejected rather than analyzed as a bare starting
-        # position: there is nothing to learn and no move to attribute.
-        raise InvalidGameDataError("This game has no moves to analyze.")
-
-    if len(moves) != game.move_count:
-        raise InvalidGameDataError(
-            f"Stored move count does not match the game: expected {game.move_count}, "
-            f"found {len(moves)}."
-        )
-
-    plies = [move.ply for move in moves]
-    if plies != list(range(1, len(moves) + 1)):
-        raise InvalidGameDataError("Stored moves are missing, unordered, or non-contiguous.")
-
-    positions = [moves[0].fen_before] + [move.fen_after for move in moves]
-
-    for index, fen in enumerate(positions):
-        if not fen:
-            raise InvalidGameDataError(f"Missing position for ply {index}.")
-        try:
-            chess.Board(fen)
-        except ValueError as exc:
-            raise InvalidGameDataError(f"Invalid position at ply {index}: {exc}") from exc
-
-    if len(positions) != game.move_count + 1:
-        raise InvalidGameDataError(
-            f"Expected {game.move_count + 1} positions, built {len(positions)}."
-        )
-
-    return positions
-
-
-def _sanitize_error(exc: Exception) -> str:
+def sanitize_error(exc: Exception) -> str:
     """Keep engine detail useful but never leak paths, secrets, or tracebacks."""
     if isinstance(exc, EngineError):
         message = str(exc) or "Engine analysis failed."
@@ -123,9 +77,9 @@ def _sanitize_error(exc: Exception) -> str:
     return message[:MAX_ERROR_MESSAGE_LENGTH]
 
 
-@contextmanager
-def _no_op_close(session: Session) -> Iterator[Session]:
-    yield session
+# Retained under the old private name: several tests and the worker's error
+# handling refer to it, and renaming it buys nothing.
+_sanitize_error = sanitize_error
 
 
 def analyze_game(
@@ -146,16 +100,7 @@ def analyze_game(
 
     # --- Read and validate before touching the engine -------------------
     with session_factory() as db:
-        game = db.get(Game, game_id)
-        if game is None:
-            raise GameNotFoundError(f"Game not found: {game_id}")
-
-        moves = list(
-            db.execute(
-                select(Move).where(Move.game_id == game_id).order_by(Move.ply)
-            ).scalars()
-        )
-        positions = build_positions(game, moves)
+        game, positions = load_game_positions(db, game_id)
         expected_count = game.move_count + 1
 
         latest = analysis_repo.get_latest_analysis_run_for_game(db, game_id)
@@ -188,23 +133,19 @@ def analyze_game(
 
         # --- No transaction is held while the engine works. --------------
         try:
-            evaluations: list[tuple[int, RawEvaluation]] = [
-                (ply, engine.evaluate(fen, requested_depth))
-                for ply, fen in enumerate(positions)
-            ]
+            evaluations: list[tuple[int, RawEvaluation]] = evaluate_positions(
+                engine, positions, requested_depth
+            )
 
             if len(evaluations) != expected_count:
                 raise InvalidGameDataError(
                     f"Expected {expected_count} evaluations, produced {len(evaluations)}."
                 )
         except Exception as exc:
-            _mark_failed(session_factory, run_id, _sanitize_error(exc))
+            _mark_failed(session_factory, run_id, sanitize_error(exc))
             raise
 
     # --- Persist everything at once, then complete. ----------------------
-    # Evaluations are accumulated in memory and written only after the whole
-    # game succeeds, so a failed run never leaves partial rows that could be
-    # mistaken for usable analysis.
     try:
         with session_factory() as db:
             run = analysis_repo.get_analysis_run(db, run_id)
@@ -217,7 +158,7 @@ def analyze_game(
             analysis_repo.mark_analysis_run_complete(db, run)
             db.commit()
     except Exception as exc:
-        _mark_failed(session_factory, run_id, _sanitize_error(exc))
+        _mark_failed(session_factory, run_id, sanitize_error(exc))
         raise
 
     return AnalysisResult(run_id=run_id, created=True)
@@ -238,3 +179,17 @@ def _mark_failed(session_factory: SessionFactory, run_id: uuid.UUID, message: st
                 db.commit()
     except Exception:  # noqa: BLE001 - never mask the original failure
         pass
+
+
+__all__ = [
+    "AnalysisAlreadyRunningError",
+    "AnalysisError",
+    "AnalysisResult",
+    "EngineFactory",
+    "GameNotFoundError",
+    "InvalidGameDataError",
+    "SessionFactory",
+    "analyze_game",
+    "build_positions",
+    "sanitize_error",
+]

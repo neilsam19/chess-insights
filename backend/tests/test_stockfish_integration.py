@@ -148,3 +148,63 @@ def test_engine_status_endpoint_reports_the_real_engine(client: TestClient) -> N
     assert body["engine_name"]
     assert body["configured_depth"] == settings.stockfish_depth
     assert body["detail"] is None
+
+
+def test_the_worker_analyzes_a_queued_game_with_the_real_engine(
+    client: TestClient, db_session, session_factory
+) -> None:
+    """The full Sprint 5 path against the real binary: queue a job, run one
+    worker pass, and get a durable result - with no HTTP request open for the
+    duration of the analysis."""
+    from app.models.analysis_job import JOB_COMPLETE
+    from app.repositories import analysis_jobs as jobs_repo
+    from app.worker import runner
+    from app.worker.runner import COMPLETED, WorkerConfig
+
+    game = _shortest_saved_game(client, db_session)
+
+    batch = jobs_repo.create_batch(
+        db_session,
+        upload_id=game.upload_id,
+        engine_config_hash="e" * 64,
+        requested_depth=TEST_DEPTH,
+        engine_options={"Threads": settings.stockfish_threads},
+    )
+    job = jobs_repo.enqueue_job(
+        db_session,
+        batch_id=batch.id,
+        game_id=game.id,
+        config_hash="worker-integration",
+        total_positions=game.move_count + 1,
+    )
+
+    outcome = runner.run_once(
+        config=WorkerConfig(
+            worker_id="integration-worker",
+            lease_seconds=120,
+            poll_seconds=0.01,
+            depth=TEST_DEPTH,
+        ),
+        session_factory=session_factory,
+        engine_factory=build_stockfish_engine,
+    )
+
+    assert outcome.result == COMPLETED
+    assert outcome.job_id == job.id
+
+    db_session.refresh(job)
+    assert job.status == JOB_COMPLETE
+    assert job.completed_positions == game.move_count + 1
+
+    run = jobs_repo.latest_run_for_job(db_session, job.id)
+    assert run.status == STATUS_COMPLETE
+    assert run.attempt_number == 1
+    # Provenance comes from the live engine, not from the job's config summary.
+    assert run.engine_name
+
+    evaluations = analysis_repo.list_position_evaluations_for_run(db_session, run.id)
+    assert len(evaluations) == game.move_count + 1
+    for evaluation in evaluations:
+        has_cp = evaluation.score_cp_white is not None
+        has_mate = evaluation.mate_in_white is not None
+        assert has_cp != has_mate, f"ply {evaluation.ply} has an ambiguous score"

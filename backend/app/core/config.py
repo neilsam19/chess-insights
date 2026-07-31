@@ -15,6 +15,28 @@ class Settings(BaseSettings):
     stockfish_threads: int = 1
     stockfish_hash_mb: int = 64
 
+    # Analysis worker. Only the worker process reads these - the API never
+    # starts an engine, so none of them affect request handling.
+    #
+    # Unset worker id means "derive one from host and pid", which is what makes
+    # lease ownership meaningful when more than one worker is running.
+    analysis_worker_id: str | None = None
+    # How long a claim stays valid without a heartbeat. Comfortably longer than
+    # the time one position takes, so a slow position never looks like a dead
+    # worker. The sweep that acts on expiry arrives in Checkpoint 4.
+    analysis_lease_seconds: int = 60
+    # How often the lease is renewed while a job runs. Must be comfortably
+    # smaller than the lease itself: renewal happens on a background thread, so
+    # a single slow position cannot let its own lease expire.
+    analysis_heartbeat_seconds: float = 5.0
+    # How long to wait before polling again when the queue is empty.
+    analysis_poll_seconds: float = 2.0
+    # How often to look for jobs abandoned by a dead worker.
+    analysis_stale_sweep_seconds: float = 30.0
+    # Delay before a requeued job becomes claimable again. Keeps a job that
+    # kills its worker from being retried in a tight loop.
+    analysis_retry_delay_seconds: int = 5
+
     model_config = {"env_file": ".env"}
 
 

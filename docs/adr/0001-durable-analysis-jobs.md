@@ -277,6 +277,27 @@ Sprint 4 rule that a misconfigured server is a `503`, not a failed analysis.
 The stale sweep handles both cases: it fails the job, and the run too if one
 exists.
 
+### Lease renewal runs on its own thread (amended during CP4)
+
+Renewing the lease between positions is the obvious implementation and it is
+wrong. A single `evaluate` call at depth 20 can run for minutes — longer than
+the whole lease — so the job would be swept up as abandoned while its worker
+was working perfectly. The failure mode is worst exactly where analysis is most
+expensive.
+
+So renewal happens on a background thread at a fixed
+`ANALYSIS_HEARTBEAT_SECONDS` interval, on its own database sessions, with no
+relationship to how long any position takes. The analysis loop only publishes a
+counter; the keeper thread does all the writing.
+
+This also fixes progress throughput for free: CP3 wrote one row update per
+position, and progress now rides along with the heartbeat instead.
+
+Consequence for tests: a `Session` must not be used from two threads, so
+`heartbeat_seconds = 0` disables the thread and falls back to renewing once per
+position. Tests on the shared rollback session use that; the threaded path is
+covered by tests with independent connections.
+
 ### Manual retry is stricter than the transition table
 
 `ALLOWED_TRANSITIONS` permits `running → queued`, but that edge belongs to the
