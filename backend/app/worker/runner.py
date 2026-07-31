@@ -34,20 +34,17 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.analysis_job import AnalysisJob
+from app.models.analysis_run import STATUS_RUNNING
 from app.repositories import analysis as analysis_repo
 from app.repositories import analysis_jobs as jobs_repo
+from app.services import analysis_errors
 from app.services.analysis_executor import (
-    MAX_ERROR_MESSAGE_LENGTH,
     AnalysisAbandoned,
-    GameNotFoundError,
-    InvalidGameDataError,
     evaluate_positions,
     load_game_positions,
 )
 from app.services.engine import (
     ChessEngine,
-    EngineError,
-    EngineUnavailableError,
     build_stockfish_engine,
     engine_session,
 )
@@ -64,6 +61,8 @@ EngineFactory = Callable[[], ChessEngine]
 CLAIMED_NOTHING = "idle"
 COMPLETED = "completed"
 FAILED = "failed"
+REQUEUED = "requeued"
+CANCELLED = "cancelled"
 DISCARDED = "discarded"
 
 
@@ -120,38 +119,6 @@ def _default_session() -> ContextManager[Session]:
     return SessionLocal()
 
 
-def classify_error(exc: Exception) -> str:
-    """Map a failure onto the error codes in ADR section 6.
-
-    Checkpoint 5 splits `EngineFailureError` so that a crashed engine can be
-    told apart from an invalid position or an ambiguous score. Until then every
-    engine failure records `engine_crashed`, which is harmless because nothing
-    retries automatically yet.
-    """
-    if isinstance(exc, EngineUnavailableError):
-        return "engine_unavailable"
-    if isinstance(exc, EngineError):
-        return "engine_crashed"
-    if isinstance(exc, (InvalidGameDataError, GameNotFoundError)):
-        # A game deleted mid-run takes its job with it by cascade, so
-        # GameNotFoundError after a claim is effectively unreachable.
-        return "invalid_game_data"
-    return "unexpected_error"
-
-
-def safe_message(exc: Exception) -> str:
-    """Never leak paths, secrets, or tracebacks into a stored error message.
-
-    Engine and stored-data errors are written by this application and are safe
-    to show; anything else is replaced wholesale.
-    """
-    if isinstance(exc, (EngineError, InvalidGameDataError, GameNotFoundError)):
-        message = str(exc) or "Engine analysis failed."
-    else:
-        message = "Analysis failed unexpectedly."
-    return message[:MAX_ERROR_MESSAGE_LENGTH]
-
-
 def _fail(
     session_factory: SessionFactory,
     *,
@@ -159,30 +126,93 @@ def _fail(
     run_id: uuid.UUID | None,
     worker_id: str,
     exc: Exception,
+    retry_delay_seconds: int = 0,
 ) -> JobOutcome:
-    """Record a terminal failure on the job and, if one exists, on the run.
+    """Record a failed attempt, retrying it only if that could possibly help.
 
-    Stores no evaluations. Secondary errors are swallowed: the original failure
-    is what matters, not a follow-on database problem while recording it.
+    A retryable error with attempts left goes back to the queue after a short
+    delay; anything else fails terminally. Either way the run is marked failed
+    and no evaluations are stored, so each attempt keeps its own honest
+    history.
+
+    Secondary errors are swallowed: the original failure is what matters, not
+    a follow-on database problem while recording it.
     """
-    code = classify_error(exc)
-    message = safe_message(exc)
+    code = analysis_errors.classify(exc)
+    message = analysis_errors.safe_message(exc)
+    result = FAILED
+
     try:
         with session_factory() as db:
             db.rollback()
-            jobs_repo.fail_job(
-                db, job_id=job_id, worker_id=worker_id, error_code=code, error_message=message
-            )
+
             if run_id is not None:
                 run = analysis_repo.get_analysis_run(db, run_id)
                 if run is not None:
                     analysis_repo.mark_analysis_run_failed(db, run, message)
+
+            job = jobs_repo.get_job(db, job_id)
+            attempts_remain = job is not None and job.attempt_count < job.max_attempts
+
+            if analysis_errors.is_retryable(code) and attempts_remain:
+                jobs_repo.requeue_job(
+                    db,
+                    job_id=job_id,
+                    worker_id=worker_id,
+                    error_code=code,
+                    error_message=message,
+                    delay_seconds=retry_delay_seconds,
+                )
+                result = REQUEUED
+            else:
+                jobs_repo.fail_job(
+                    db,
+                    job_id=job_id,
+                    worker_id=worker_id,
+                    error_code=code,
+                    error_message=message,
+                )
             db.commit()
     except Exception:  # noqa: BLE001 - never mask the original failure
         logger.exception("Could not record failure for job %s", job_id)
 
-    logger.warning("job=%s failed code=%s", job_id, code)
-    return JobOutcome(job_id=job_id, result=FAILED, error_code=code)
+    logger.warning("job=%s %s code=%s", job_id, result, code)
+    return JobOutcome(job_id=job_id, result=result, error_code=code)
+
+
+def _cancel(
+    session_factory: SessionFactory,
+    *,
+    job_id: uuid.UUID,
+    run_id: uuid.UUID | None,
+    worker_id: str,
+) -> JobOutcome:
+    """Stand down because a user asked to.
+
+    Recorded as cancelled rather than failed: nothing went wrong, and calling
+    it a failure would be misleading in the UI. No evaluations are stored, so
+    a cancelled attempt leaves nothing partial behind.
+    """
+    try:
+        with session_factory() as db:
+            db.rollback()
+
+            if run_id is not None:
+                run = analysis_repo.get_analysis_run(db, run_id)
+                if run is not None and run.status == STATUS_RUNNING:
+                    analysis_repo.mark_analysis_run_cancelled(
+                        db, run, "Analysis was cancelled before it finished."
+                    )
+
+            jobs_repo.mark_job_cancelled(db, job_id=job_id, worker_id=worker_id)
+            db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not record cancellation for job %s", job_id)
+
+    logger.info("job=%s cancelled", job_id)
+    return JobOutcome(
+        job_id=job_id, result=CANCELLED, error_code=analysis_errors.CANCELLED_BY_USER
+    )
 
 
 def _claim(
@@ -230,7 +260,12 @@ def run_once(
             _, positions = load_game_positions(db, game_id)
     except Exception as exc:  # noqa: BLE001 - classified below
         return _fail(
-            session_factory, job_id=job_id, run_id=None, worker_id=config.worker_id, exc=exc
+            session_factory,
+            job_id=job_id,
+            run_id=None,
+            worker_id=config.worker_id,
+            exc=exc,
+            retry_delay_seconds=config.retry_delay_seconds,
         )
 
     # Renewal runs on its own thread and its own sessions, so a position that
@@ -247,14 +282,15 @@ def run_once(
     )
 
     def report_progress(done: int, total: int) -> bool:
-        """Publish progress and report whether the job is still ours.
+        """Publish progress and report whether there is any reason to continue.
 
-        Returning False stops the analysis at this position boundary: the job
-        belongs to someone else now, so continuing would burn engine time on
-        work that is going to be discarded anyway.
+        Returning False stops the analysis at this position boundary - either
+        the job now belongs to someone else, or a user cancelled it. Both mean
+        further engine time would be wasted; they differ only in what gets
+        recorded afterwards.
         """
         keeper.note_progress(done)
-        return not keeper.lost
+        return not keeper.should_stop
 
     run_id: uuid.UUID | None = None
     try:
@@ -284,13 +320,26 @@ def run_once(
                 # never has a thread still renewing its lease.
                 keeper.stop()
     except AnalysisAbandoned:
+        if keeper.cancel_requested:
+            return _cancel(
+                session_factory,
+                job_id=job_id,
+                run_id=run_id,
+                worker_id=config.worker_id,
+            )
         # Ownership was lost mid-run. The new owner is authoritative; this
-        # attempt simply throws its work away.
+        # attempt simply throws its work away and records nothing, since the
+        # sweep has already accounted for it.
         logger.info("job=%s abandoned - lease no longer held", job_id)
         return JobOutcome(job_id=job_id, result=DISCARDED)
     except Exception as exc:  # noqa: BLE001 - classified and recorded
         return _fail(
-            session_factory, job_id=job_id, run_id=run_id, worker_id=config.worker_id, exc=exc
+            session_factory,
+            job_id=job_id,
+            run_id=run_id,
+            worker_id=config.worker_id,
+            exc=exc,
+            retry_delay_seconds=config.retry_delay_seconds,
         )
 
     # --- Persist. Ownership is checked before anything is written. -------
@@ -312,7 +361,12 @@ def run_once(
             db.commit()
     except Exception as exc:  # noqa: BLE001
         return _fail(
-            session_factory, job_id=job_id, run_id=run_id, worker_id=config.worker_id, exc=exc
+            session_factory,
+            job_id=job_id,
+            run_id=run_id,
+            worker_id=config.worker_id,
+            exc=exc,
+            retry_delay_seconds=config.retry_delay_seconds,
         )
 
     logger.info("job=%s complete positions=%s", job_id, len(evaluations))

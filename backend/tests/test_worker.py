@@ -12,14 +12,27 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from app.models.analysis_job import JOB_COMPLETE, JOB_FAILED, JOB_RUNNING, AnalysisJob
+from app.models.analysis_job import (
+    JOB_COMPLETE,
+    JOB_FAILED,
+    JOB_QUEUED,
+    JOB_RUNNING,
+    AnalysisJob,
+)
 from app.models.analysis_run import STATUS_COMPLETE, STATUS_FAILED, AnalysisRun
 from app.models.game import Game
 from app.models.position_evaluation import PositionEvaluation
 from app.repositories import analysis_jobs as jobs_repo
 from app.services.engine import EngineUnavailableError
 from app.worker import runner
-from app.worker.runner import CLAIMED_NOTHING, COMPLETED, DISCARDED, FAILED, WorkerConfig
+from app.worker.runner import (
+    CLAIMED_NOTHING,
+    COMPLETED,
+    DISCARDED,
+    FAILED,
+    REQUEUED,
+    WorkerConfig,
+)
 from fake_engine import FakeEngine
 from sample_data import SAMPLE_PGN_BYTES
 
@@ -54,7 +67,7 @@ def _game(client: TestClient, db_session) -> Game:
     return min(games, key=lambda g: g.move_count)
 
 
-def _queue(db_session, game: Game) -> AnalysisJob:
+def _queue(db_session, game: Game, **overrides) -> AnalysisJob:
     batch = jobs_repo.create_batch(
         db_session,
         upload_id=game.upload_id,
@@ -68,6 +81,7 @@ def _queue(db_session, game: Game) -> AnalysisJob:
         game_id=game.id,
         config_hash=uuid.uuid4().hex,
         total_positions=game.move_count + 1,
+        max_attempts=overrides.pop("max_attempts", 2),
     )
 
 
@@ -212,7 +226,7 @@ class TestFailure:
         self, client: TestClient, db_session, session_factory, config
     ) -> None:
         """Invariant 5. A failed attempt must leave nothing that could be
-        mistaken for usable analysis."""
+        mistaken for usable analysis - whether or not it will be retried."""
         game = _game(client, db_session)
         job = _queue(db_session, game)
 
@@ -222,17 +236,40 @@ class TestFailure:
             engine_factory=lambda: FakeEngine(fail_on_call=3),
         )
 
-        assert outcome.result == FAILED
+        # A crashed engine is transient, so with attempts left this requeues
+        # rather than failing outright.
+        assert outcome.result == REQUEUED
         assert outcome.error_code == "engine_crashed"
 
         db_session.refresh(job)
-        assert job.status == JOB_FAILED
+        assert job.status == JOB_QUEUED
         assert job.error_code == "engine_crashed"
         assert job.claimed_by is None
+        assert job.completed_positions == 0
 
         run = _run_for(db_session, job.id)
         assert run.status == STATUS_FAILED
         assert _evaluations(db_session, run.id) == 0
+
+    def test_a_crash_on_the_last_attempt_fails_terminally(
+        self, client: TestClient, db_session, session_factory, config
+    ) -> None:
+        """Retryable does not mean infinite - max_attempts is what stops it."""
+        game = _game(client, db_session)
+        job = _queue(db_session, game, max_attempts=1)
+
+        outcome = runner.run_once(
+            config=config,
+            session_factory=session_factory,
+            engine_factory=lambda: FakeEngine(fail_on_call=3),
+        )
+
+        assert outcome.result == FAILED
+
+        db_session.refresh(job)
+        assert job.status == JOB_FAILED
+        assert job.error_code == "engine_crashed"
+        assert job.attempt_count == 1
 
     def test_an_unstartable_engine_creates_no_run(
         self, client: TestClient, db_session, session_factory, config

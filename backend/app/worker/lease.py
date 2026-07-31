@@ -62,11 +62,26 @@ class LeaseKeeper:
         self._completed = 0
         self._stop = threading.Event()
         self._lost = threading.Event()
+        self._cancelled = threading.Event()
         self._thread: threading.Thread | None = None
 
     @property
     def lost(self) -> bool:
         return self._lost.is_set()
+
+    @property
+    def cancel_requested(self) -> bool:
+        """A user asked this job to stop.
+
+        Learned from the heartbeat rather than a separate query: cancellation
+        sets a flag instead of changing status, precisely so that the worker
+        can notice it at a position boundary and stop cleanly.
+        """
+        return self._cancelled.is_set()
+
+    @property
+    def should_stop(self) -> bool:
+        return self.lost or self.cancel_requested
 
     @property
     def threaded(self) -> bool:
@@ -110,12 +125,12 @@ class LeaseKeeper:
                 break
 
     def _renew(self) -> bool:
-        """One heartbeat. Returns False once the job is no longer ours."""
-        if self._lost.is_set():
+        """One heartbeat. Returns False once there is no reason to keep going."""
+        if self._stop.is_set() or self.should_stop:
             return False
         try:
             with self._session_factory() as db:
-                still_ours = jobs_repo.heartbeat_job(
+                result = jobs_repo.heartbeat_job(
                     db,
                     job_id=self._job_id,
                     worker_id=self._worker_id,
@@ -130,7 +145,14 @@ class LeaseKeeper:
             logger.warning("job=%s heartbeat failed", self._job_id, exc_info=True)
             return True
 
-        if not still_ours:
+        if not result.owned:
             logger.info("job=%s lease lost", self._job_id)
             self._lost.set()
-        return still_ours
+            return False
+
+        if result.cancel_requested:
+            logger.info("job=%s cancellation requested", self._job_id)
+            self._cancelled.set()
+            return False
+
+        return True

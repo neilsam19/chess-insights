@@ -389,20 +389,40 @@ committing late.
 | `ambiguous_score` | The engine returned neither centipawns nor mate |
 | `evaluation_count_mismatch` | Produced a number of evaluations other than `N+1` |
 | `cancelled_by_user` | Not a failure; recorded on the cancelled run for provenance |
+| `unexpected_error` | An unrecognised exception (added during CP5) |
 
 Retrying any of these would deterministically reproduce the same result, so
 automatic retry would only waste engine time.
 
-### Implementation note for CP5
+`unexpected_error` is deliberately **not** retryable. An error nobody
+anticipated is the last thing that should be repeated automatically, and its
+presence in the data is a signal that something needs classifying properly.
 
-`EngineFailureError` currently covers three of these at once —
-`engine_crashed`, `invalid_position`, and `ambiguous_score` are all raised as
-the same class from `engine.py`. CP5 must give it a `code` attribute or split
-it into subclasses. Classifying on message text is not acceptable.
+### Resolved during CP5
 
-`EngineUnavailableError` already maps cleanly to `engine_unavailable`, and its
-existing meaning is preserved: encountered at enqueue it is a `503` with **no
-job created**, because a misconfigured server is not a failed analysis.
+`EngineFailureError` was a single class covering three distinct codes.
+It is now a base class with subclasses, so classification is by type and never
+by message text:
+
+```
+EngineError
+├── EngineUnavailableError          -> engine_unavailable      (503, no run)
+│   └── EngineMisconfiguredError    -> engine_misconfigured    (503, no run)
+└── EngineFailureError
+    ├── EngineCrashedError          -> engine_crashed          RETRYABLE
+    ├── InvalidPositionError        -> invalid_position
+    └── AmbiguousScoreError         -> ambiguous_score
+```
+
+`EngineMisconfiguredError` subclasses `EngineUnavailableError` so the existing
+`503`-with-no-run behaviour is preserved unchanged, while still distinguishing
+a rejected option from a missing binary — they are fixed differently.
+`classify()` therefore tests most-specific first.
+
+One module, `app/services/analysis_errors.py`, owns both the codes and the
+retryability decision. Deciding retryability at each call site is how a queue
+ends up retrying a permanently broken game forever while giving up instantly on
+a blip.
 
 ### Limits
 

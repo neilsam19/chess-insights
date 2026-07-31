@@ -71,6 +71,23 @@ def assert_transition(job: AnalysisJob, to_status: str) -> None:
 
 
 @dataclass(frozen=True)
+class HeartbeatResult:
+    """What one lease renewal learned about the job.
+
+    `owned` False means stop and discard. `cancel_requested` True means stop
+    and mark the job cancelled - a different outcome, and one the user asked
+    for.
+    """
+
+    owned: bool
+    cancel_requested: bool
+
+    def __bool__(self) -> bool:
+        """Truthy while the job is still ours, so callers can read naturally."""
+        return self.owned
+
+
+@dataclass(frozen=True)
 class CancelOutcome:
     """What a cancel request actually did.
 
@@ -281,12 +298,17 @@ def heartbeat_job(
     worker_id: str,
     lease_seconds: int,
     completed_positions: int | None = None,
-) -> bool:
+) -> HeartbeatResult:
     """Renew this worker's lease, optionally recording progress.
 
-    Returns False when the job is no longer ours - reclaimed by the stale
-    sweep, cancelled, or finished. A worker that sees False must stop and
-    discard its results rather than keep burning engine time.
+    Reports two things at once, from a single statement. `owned` is False when
+    the job is no longer ours - reclaimed by the stale sweep or finished by
+    someone else - and the worker must stop and discard its results.
+    `cancel_requested` is how a running worker learns a user pressed cancel,
+    since cancellation sets a flag rather than changing status.
+
+    Both come from one `RETURNING`, so a heartbeat costs the same as before
+    rather than adding a second query per interval.
 
     Progress is monotonic and bounded: a lower value than already recorded is
     ignored, and a value beyond `total_positions` is clamped rather than
@@ -305,7 +327,7 @@ def heartbeat_job(
             func.greatest(AnalysisJob.completed_positions, completed_positions),
         )
 
-    result = db.execute(
+    row = db.execute(
         update(AnalysisJob)
         .where(
             AnalysisJob.id == job_id,
@@ -313,8 +335,12 @@ def heartbeat_job(
             AnalysisJob.status == JOB_RUNNING,
         )
         .values(**values)
-    )
-    return result.rowcount == 1
+        .returning(AnalysisJob.cancel_requested_at)
+    ).first()
+
+    if row is None:
+        return HeartbeatResult(owned=False, cancel_requested=False)
+    return HeartbeatResult(owned=True, cancel_requested=row[0] is not None)
 
 
 def find_stale_jobs(db: Session, *, limit: int = 50) -> list[AnalysisJob]:
@@ -553,6 +579,7 @@ def count_jobs_by_status(db: Session, batch_id: uuid.UUID) -> dict[str, int]:
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "CancelOutcome",
+    "HeartbeatResult",
     "InvalidJobTransition",
     "assert_transition",
     "cancel_job",

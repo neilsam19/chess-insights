@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.analysis_run import (
+    STATUS_CANCELLED,
     STATUS_COMPLETE,
     STATUS_FAILED,
     STATUS_RUNNING,
@@ -125,11 +126,29 @@ def mark_analysis_run_failed(db: Session, run: AnalysisRun, error_message: str) 
     return run
 
 
+def mark_analysis_run_cancelled(
+    db: Session, run: AnalysisRun, message: str | None = None
+) -> AnalysisRun:
+    """A run stopped by the user.
+
+    Kept distinct from failed: nothing went wrong, and showing "analysis
+    failed" for something the user chose would be misleading. Like a failed
+    run, it holds zero evaluations.
+    """
+    run.status = STATUS_CANCELLED
+    run.completed_at = datetime.now(timezone.utc)
+    run.error_message = message
+    db.flush()
+    return run
+
+
 __all__ = [
+    "STATUS_CANCELLED",
     "STATUS_COMPLETE",
     "STATUS_FAILED",
     "STATUS_RUNNING",
     "create_analysis_run",
+    "mark_analysis_run_cancelled",
     "get_analysis_run",
     "get_latest_analysis_run_for_game",
     "get_run_with_evaluations",

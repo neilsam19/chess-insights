@@ -41,10 +41,42 @@ class EngineUnavailableError(EngineError):
     """
 
 
+class EngineMisconfiguredError(EngineUnavailableError):
+    """The engine started but rejected its configuration.
+
+    A subclass of unavailable, because it is still a server configuration
+    fault and still a 503 - but a distinguishable one, since a wrong option is
+    fixed differently from a missing binary.
+    """
+
+
 class EngineFailureError(EngineError):
     """The engine started but failed during analysis.
 
     This *is* an analysis failure and should be recorded on the run.
+    """
+
+
+class EngineCrashedError(EngineFailureError):
+    """The engine process died or misbehaved mid-analysis.
+
+    Retryable: nothing about the request caused it, so the same work has a
+    real chance of succeeding on another attempt.
+    """
+
+
+class InvalidPositionError(EngineFailureError):
+    """A stored position the engine refused to analyze.
+
+    Not retryable - the position will be exactly as invalid next time.
+    """
+
+
+class AmbiguousScoreError(EngineFailureError):
+    """The engine returned neither a centipawn score nor a mate.
+
+    Not retryable: it means the output could not be interpreted, and storing
+    it as "no evaluation" would be a lie.
     """
 
 
@@ -110,7 +142,7 @@ def normalize_score(pov_score: chess.engine.PovScore) -> tuple[int | None, int |
 
     # Neither a centipawn nor a mate score - treated as malformed rather than
     # silently stored as "no evaluation".
-    raise EngineFailureError("Engine returned a score with neither centipawns nor mate.")
+    raise AmbiguousScoreError("Engine returned a score with neither centipawns nor mate.")
 
 
 def _split_name_and_version(raw_name: str) -> tuple[str, str | None]:
@@ -214,7 +246,9 @@ class StockfishEngine:
             self._engine.configure(self._options)
         except Exception as exc:  # noqa: BLE001
             self.close()
-            raise EngineUnavailableError(f"Could not configure the chess engine: {exc}") from exc
+            raise EngineMisconfiguredError(
+                f"Could not configure the chess engine: {exc}"
+            ) from exc
 
     def identify(self) -> EngineIdentity:
         raw_name = str(self._engine.id.get("name", "Unknown"))
@@ -230,18 +264,20 @@ class StockfishEngine:
         try:
             board = chess.Board(fen)
         except ValueError as exc:
-            raise EngineFailureError(f"Refusing to analyze an invalid position: {exc}") from exc
+            raise InvalidPositionError(
+                f"Refusing to analyze an invalid position: {exc}"
+            ) from exc
 
         try:
             info = self._engine.analyse(board, chess.engine.Limit(depth=depth))
         except EngineError:
             raise
         except Exception as exc:  # noqa: BLE001 - engine died or misbehaved mid-run
-            raise EngineFailureError(f"Engine analysis failed: {exc}") from exc
+            raise EngineCrashedError(f"Engine analysis failed: {exc}") from exc
 
         pov_score = info.get("score")
         if pov_score is None:
-            raise EngineFailureError("Engine returned no score for a position.")
+            raise AmbiguousScoreError("Engine returned no score for a position.")
 
         score_cp_white, mate_in_white = normalize_score(pov_score)
 

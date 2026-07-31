@@ -266,12 +266,34 @@ class TestOwnership:
         job = _job(db_session, _batch(db_session, game), game)
         _claim(db_session)
 
-        assert (
-            jobs_repo.heartbeat_job(
-                db_session, job_id=job.id, worker_id="someone-else", lease_seconds=LEASE
-            )
-            is False
+        result = jobs_repo.heartbeat_job(
+            db_session, job_id=job.id, worker_id="someone-else", lease_seconds=LEASE
         )
+
+        assert result.owned is False
+        assert bool(result) is False
+
+    def test_heartbeat_reports_a_pending_cancellation(
+        self, client: TestClient, db_session
+    ) -> None:
+        """Cancellation sets a flag rather than a status, so the heartbeat is
+        how a running worker finds out - without paying for a second query."""
+        game = _games(client, db_session)[0]
+        job = _job(db_session, _batch(db_session, game), game)
+        _claim(db_session)
+
+        before = jobs_repo.heartbeat_job(
+            db_session, job_id=job.id, worker_id=WORKER, lease_seconds=LEASE
+        )
+        assert before.cancel_requested is False
+
+        jobs_repo.cancel_job(db_session, job_id=job.id)
+        after = jobs_repo.heartbeat_job(
+            db_session, job_id=job.id, worker_id=WORKER, lease_seconds=LEASE
+        )
+
+        assert after.owned is True
+        assert after.cancel_requested is True
 
     def test_progress_never_goes_backwards(self, client: TestClient, db_session) -> None:
         """Invariant 7. An out-of-order heartbeat must not rewind the bar."""
