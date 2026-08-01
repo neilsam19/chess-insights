@@ -36,6 +36,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override the configured analysis depth.",
     )
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help=(
+            "How many games to analyse at once. Defaults to "
+            "ANALYSIS_WORKER_CONCURRENCY (1). Each slot runs its own engine, "
+            "so CPU demand is roughly this times STOCKFISH_THREADS."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         help="Python logging level (default: INFO).",
@@ -51,7 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger = logging.getLogger("app.worker")
 
-    config = build_config(worker_id=args.worker_id, depth=args.depth)
+    config = build_config(
+        worker_id=args.worker_id, depth=args.depth, concurrency=args.concurrency
+    )
 
     # Fail loudly at startup rather than failing every job one at a time. The
     # engine is not started here - only its configuration is validated.
@@ -84,7 +96,17 @@ def main(argv: list[str] | None = None) -> int:
     stop = threading.Event()
 
     def request_stop(signum, _frame) -> None:
-        logger.info("signal %s received - finishing current job then stopping", signum)
+        if stop.is_set():
+            # A second Ctrl+C means "I meant it". Exiting now abandons the
+            # in-flight game, which is safe: its lease expires and the next
+            # worker to start recovers it.
+            logger.warning("second signal %s - exiting without finishing", signum)
+            raise SystemExit(130)
+        logger.info(
+            "signal %s received - finishing in-flight games then stopping "
+            "(press again to exit immediately)",
+            signum,
+        )
         stop.set()
 
     signal.signal(signal.SIGINT, request_stop)

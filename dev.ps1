@@ -7,10 +7,14 @@
 # disturbing the other. Skip it with -NoWorker if you only need the UI.
 
 param(
-  [switch]$NoWorker
+  [switch]$NoWorker,
+  # Games analysed at once. Defaults to ANALYSIS_WORKER_CONCURRENCY in .env.
+  # CPU demand is roughly this times STOCKFISH_THREADS.
+  [int]$Concurrency = 0
 )
 
 $repoRoot = $PSScriptRoot
+$workerArgs = if ($Concurrency -gt 0) { " --concurrency $Concurrency" } else { "" }
 
 Start-Process powershell -ArgumentList @(
   "-NoExit", "-Command",
@@ -20,7 +24,7 @@ Start-Process powershell -ArgumentList @(
 if (-not $NoWorker) {
   Start-Process powershell -ArgumentList @(
     "-NoExit", "-Command",
-    "Set-Location '$repoRoot\backend'; .\.venv\Scripts\Activate.ps1; python -m app.worker"
+    "Set-Location '$repoRoot\backend'; .\.venv\Scripts\Activate.ps1; python -m app.worker$workerArgs"
   )
 }
 

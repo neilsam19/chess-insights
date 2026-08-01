@@ -125,6 +125,29 @@ python -m app.worker --once     # process at most one job, then exit
 The API never starts an engine, so **the worker is what needs
 `STOCKFISH_PATH`**. Without a worker running, jobs simply stay queued.
 
+`Ctrl+C` stops it gracefully: it finishes the games in flight and then exits.
+Press it a second time to exit immediately - that is safe too, because the
+abandoned job's lease expires and the next worker to start recovers it.
+
+### Bounded concurrency
+
+`ANALYSIS_WORKER_CONCURRENCY` (default `1`) caps how many games are analysed at
+once. It is a hard ceiling on concurrent Stockfish processes **regardless of
+how many games are queued** - submitting 500 games starts this many engines,
+not 500.
+
+```powershell
+python -m app.worker --concurrency 2
+```
+
+Approximate CPU demand is `ANALYSIS_WORKER_CONCURRENCY × STOCKFISH_THREADS`,
+and memory roughly `ANALYSIS_WORKER_CONCURRENCY × STOCKFISH_HASH_MB` - the
+product, not the larger of the two. The worker logs both at startup. Default
+`1` keeps a laptop responsive while analysis runs; raise it only if you have
+cores to spare.
+
+Every worker setting is documented in `backend/.env.example`.
+
 ### Installing Stockfish
 
 Stockfish is a binary dependency and is **not** installed by `pip`. Download a
@@ -172,12 +195,13 @@ failed analysis.
 chess-insights/
 ├── backend/
 │   ├── app/
-│   │   ├── api/routes/       # HTTP layer (health, uploads, games)
+│   │   ├── api/routes/       # HTTP layer (health, uploads, games, analysis)
 │   │   ├── core/             # settings, DB engine/session
-│   │   ├── models/           # SQLAlchemy tables (Upload, Game, Move)
+│   │   ├── models/           # SQLAlchemy tables (Upload, Game, Move, jobs)
 │   │   ├── repositories/     # DB query functions
 │   │   ├── schemas/          # Pydantic request/response models
-│   │   └── services/         # business logic (parser, statistics, import)
+│   │   ├── services/         # business logic (parser, statistics, import)
+│   │   └── worker/           # the analysis worker: claiming, leases, sweep
 │   ├── alembic/               # DB migrations
 │   ├── tests/                 # pytest, incl. real-Postgres integration tests
 │   └── requirements.txt
@@ -190,10 +214,37 @@ chess-insights/
 │       └── utils/               # adapters, player-name helpers
 ├── sample-data/
 │   └── sample-games.pgn
+├── docs/adr/                  # architecture decision records
 ├── compose.yaml               # PostgreSQL (Docker) for local dev
-├── dev.ps1                    # starts backend + frontend dev servers
+├── dev.ps1                    # starts backend + worker + frontend
 └── plan2.md / planmini.md      # sprint planning docs
 ```
+
+## Architecture
+
+Three processes, one database:
+
+```
+  browser ──HTTP──▶ FastAPI ──writes job──▶ PostgreSQL ◀──claims job── worker
+                       │                        ▲                        │
+                       └────reads state─────────┘                        ▼
+                                                                     Stockfish
+```
+
+The API never runs an engine. It validates a request, commits a job, and
+returns; the worker claims jobs with `FOR UPDATE SKIP LOCKED`, holds a
+time-limited lease while it works, and writes results back. The browser polls
+for progress.
+
+That split is what makes analysis durable: restarting the API does not disturb
+a running analysis, and killing the worker mid-game leaves a lease that expires
+so the job can be recovered and retried rather than being stuck forever.
+
+PostgreSQL is the only infrastructure service. There is no Redis, no broker, and
+no message queue - job state lives in the same transactional database as the
+product data, so the two can never disagree. The reasoning, including when that
+would be worth revisiting, is in
+[docs/adr/0001-durable-analysis-jobs.md](docs/adr/0001-durable-analysis-jobs.md).
 
 ## Prerequisites
 
@@ -284,8 +335,11 @@ pytest -m stockfish_integration      # only the real-engine tests
 pytest -m "not stockfish_integration"  # everything else
 ```
 
-Without an engine configured you should see `365 passed, 6 skipped`; with one,
-`371 passed`.
+Without an engine configured you should see `370 passed, 6 skipped`; with one,
+`376 passed`.
+
+A full manual acceptance checklist is in
+[docs/sprint-5-acceptance.md](docs/sprint-5-acceptance.md).
 
 Frontend (from `frontend/`):
 
@@ -301,13 +355,18 @@ Deliberately out of scope for now, planned for later sprints:
 
 - No move-quality classification - evaluations are stored, but centipawn loss,
   accuracy, and blunder/mistake labels are not derived from them yet
-- No bulk analysis: one game at a time, synchronously. There are no background
-  jobs, queues, progress tracking, cancellation, or resumability, so a run left
-  as `running` by a killed backend stays that way
+- No re-analysis of an already-analysed game at a different depth. The data
+  model supports it (a different depth is a different configuration, so it
+  would be a new job rather than a mutation), but no UI offers it
+- Resumability is game-level: a game interrupted mid-analysis restarts from the
+  first position rather than resuming, because partial evaluations are
+  deliberately never persisted
 - No family-level opening rollups (openings are grouped by their full canonical
   name, so `Sicilian Defense: Najdorf Variation` and
   `Sicilian Defense: Najdorf Variation, English Attack` count separately)
 - No authentication - all saved uploads are visible to anyone using the app
 - No generative-AI explanations
-- No deployment/production setup - local development only
-- No background jobs - imports happen synchronously within the request
+- No deployment/production setup - local development only, and nothing is
+  containerized except PostgreSQL
+- PGN *imports* are still synchronous within the request; only engine analysis
+  runs in the background

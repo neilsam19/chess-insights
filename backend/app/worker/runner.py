@@ -24,9 +24,8 @@ import logging
 import os
 import socket
 import threading
-import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, ContextManager
 
 from sqlalchemy.orm import Session
@@ -78,6 +77,10 @@ class WorkerConfig:
     heartbeat_seconds: float = 0.0
     stale_sweep_seconds: float = 30.0
     retry_delay_seconds: int = 5
+    # Number of games analysed at once. Each slot claims independently and
+    # runs its own engine, so this is the hard ceiling on concurrent Stockfish
+    # processes regardless of how much work is queued.
+    concurrency: int = 1
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,7 @@ def build_config(
     poll_seconds: float | None = None,
     depth: int | None = None,
     heartbeat_seconds: float | None = None,
+    concurrency: int | None = None,
 ) -> WorkerConfig:
     return WorkerConfig(
         worker_id=worker_id or settings.analysis_worker_id or default_worker_id(),
@@ -112,6 +116,7 @@ def build_config(
         ),
         stale_sweep_seconds=settings.analysis_stale_sweep_seconds,
         retry_delay_seconds=settings.analysis_retry_delay_seconds,
+        concurrency=max(1, concurrency or settings.analysis_worker_concurrency),
     )
 
 
@@ -231,8 +236,13 @@ def _cancel(
 
 def _claim(
     session_factory: SessionFactory, config: WorkerConfig
-) -> tuple[uuid.UUID, uuid.UUID, int] | None:
-    """Take a job. Returns (job_id, game_id, attempt) or None if the queue is empty."""
+) -> tuple[uuid.UUID, uuid.UUID, int, uuid.UUID] | None:
+    """Take a job.
+
+    Returns `(job_id, game_id, attempt, batch_id)`, or None if the queue is
+    empty. Identifiers are read out before the commit because the ORM instance
+    belongs to a session that is about to close.
+    """
     with session_factory() as db:
         job: AnalysisJob | None = jobs_repo.claim_next_job(
             db, worker_id=config.worker_id, lease_seconds=config.lease_seconds
@@ -240,7 +250,7 @@ def _claim(
         if job is None:
             return None
 
-        identifiers = (job.id, job.game_id, job.attempt_count)
+        identifiers = (job.id, job.game_id, job.attempt_count, job.batch_id)
         db.commit()
         return identifiers
 
@@ -262,8 +272,11 @@ def run_once(
     if claimed is None:
         return JobOutcome(job_id=None, result=CLAIMED_NOTHING)
 
-    job_id, game_id, attempt = claimed
-    logger.info("job=%s claimed attempt=%s worker=%s", job_id, attempt, config.worker_id)
+    job_id, game_id, attempt, batch_id = claimed
+    # Every transition below carries the same identifiers, so one job's whole
+    # life can be followed with a single grep on its id.
+    log = f"job={job_id} batch={batch_id} game={game_id} attempt={attempt} worker={config.worker_id}"
+    logger.info("%s claimed", log)
 
     # --- Read positions. Invalid stored data never reaches the engine. ---
     try:
@@ -344,7 +357,7 @@ def run_once(
         # Ownership was lost mid-run. The new owner is authoritative; this
         # attempt simply throws its work away and records nothing, since the
         # sweep has already accounted for it.
-        logger.info("job=%s abandoned - lease no longer held", job_id)
+        logger.info("%s abandoned - lease no longer held", log)
         return JobOutcome(job_id=job_id, result=DISCARDED)
     except Exception as exc:  # noqa: BLE001 - classified and recorded
         return _fail(
@@ -364,7 +377,7 @@ def run_once(
             ):
                 # Reclaimed, cancelled, or deleted while we were analyzing.
                 db.rollback()
-                logger.info("job=%s discarded - not ours at commit time", job_id)
+                logger.info("%s discarded - not ours at commit time", log)
                 return JobOutcome(job_id=job_id, result=DISCARDED)
 
             analysis_repo.save_position_evaluations(
@@ -384,7 +397,7 @@ def run_once(
             retry_delay_seconds=config.retry_delay_seconds,
         )
 
-    logger.info("job=%s complete positions=%s", job_id, len(evaluations))
+    logger.info("%s complete positions=%s", log, len(evaluations))
     return JobOutcome(job_id=job_id, result=COMPLETED)
 
 
@@ -395,47 +408,139 @@ def run_forever(
     engine_factory: EngineFactory = build_stockfish_engine,
     stop: threading.Event | None = None,
 ) -> None:
-    """Poll until asked to stop.
+    """Run until asked to stop.
 
     Sweeps abandoned work at startup and then periodically. Startup matters
     most: restarting a worker that was killed mid-game is exactly how a user
     recovers, and it should just work rather than requiring anything manual.
 
-    Sleeps only when the queue is empty, so a backlog is drained without
-    waiting between jobs. `stop` is checked between jobs, never mid-analysis -
-    graceful shutdown of an in-flight game is Checkpoint 10.
+    Work is executed by `concurrency` independent slots. Each slot claims its
+    own jobs, holds its own lease under its own id, and runs its own engine, so
+    the number of Stockfish processes is capped by configuration no matter how
+    much work is queued. The supervisor thread only sweeps and reports.
+
+    Shutdown is graceful: `stop` is observed between jobs, so an in-flight game
+    is finished rather than abandoned. Killing a worker mid-game is safe too -
+    that is what the lease is for - but finishing is cheaper than redoing.
     """
     config = config or build_config()
     stop = stop or threading.Event()
 
     logger.info(
-        "worker=%s starting lease=%ss heartbeat=%ss poll=%ss depth=%s",
+        "worker=%s starting concurrency=%s depth=%s threads=%s hash=%sMB "
+        "lease=%ss heartbeat=%ss poll=%ss",
         config.worker_id,
+        config.concurrency,
+        config.depth,
+        settings.stockfish_threads,
+        settings.stockfish_hash_mb,
         config.lease_seconds,
         config.heartbeat_seconds,
         config.poll_seconds,
-        config.depth,
     )
+    if config.concurrency > 1:
+        # Stated explicitly because it is the thing most likely to surprise:
+        # the CPU cost is the product, not the larger of the two.
+        logger.info(
+            "expect up to %s engine process(es) using ~%s thread(s) and ~%sMB of hash",
+            config.concurrency,
+            config.concurrency * settings.stockfish_threads,
+            config.concurrency * settings.stockfish_hash_mb,
+        )
 
     recovered = recover_stale_jobs(
         session_factory, retry_delay_seconds=config.retry_delay_seconds
     )
     if recovered:
         logger.warning("recovered %s abandoned job(s) at startup", len(recovered))
-    last_sweep = time.monotonic()
 
-    while not stop.is_set():
-        outcome = run_once(
-            config=config, session_factory=session_factory, engine_factory=engine_factory
+    slots = [
+        replace(config, worker_id=_slot_worker_id(config.worker_id, index))
+        for index in range(config.concurrency)
+    ]
+    threads = [
+        threading.Thread(
+            target=_slot_loop,
+            args=(slot, session_factory, engine_factory, stop),
+            name=f"analysis-slot-{index}",
         )
+        for index, slot in enumerate(slots)
+    ]
+    for thread in threads:
+        thread.start()
 
-        if time.monotonic() - last_sweep >= config.stale_sweep_seconds:
+    try:
+        while not stop.wait(config.stale_sweep_seconds):
             recover_stale_jobs(
                 session_factory, retry_delay_seconds=config.retry_delay_seconds
             )
-            last_sweep = time.monotonic()
+            _log_queue_depth(session_factory, config)
+    except KeyboardInterrupt:  # pragma: no cover - interactive use
+        pass
+    finally:
+        stop.set()
+        logger.info("worker=%s stopping - finishing in-flight games", config.worker_id)
+        for thread in threads:
+            thread.join()
+
+    logger.info("worker=%s stopped", config.worker_id)
+
+
+def _slot_worker_id(worker_id: str, index: int) -> str:
+    """One lease owner per slot.
+
+    Slots must be distinguishable or two of them could each believe they own
+    the same job, and the ownership checks that make at-least-once execution
+    safe would quietly stop working.
+    """
+    return worker_id if index == 0 else f"{worker_id}#{index}"
+
+
+def _slot_loop(
+    config: WorkerConfig,
+    session_factory: SessionFactory,
+    engine_factory: EngineFactory,
+    stop: threading.Event,
+) -> None:
+    """One slot: claim, analyze, repeat, until asked to stop.
+
+    Sleeps only when the queue is empty, so a backlog is drained without
+    waiting between jobs. An unexpected error is logged and the slot carries
+    on - one slot dying must not take the others with it, or a single bad job
+    would halve the worker's capacity until someone noticed.
+    """
+    while not stop.is_set():
+        try:
+            outcome = run_once(
+                config=config,
+                session_factory=session_factory,
+                engine_factory=engine_factory,
+            )
+        except Exception:  # noqa: BLE001 - a slot must survive its own failures
+            logger.exception("worker=%s slot failed; continuing", config.worker_id)
+            stop.wait(config.poll_seconds)
+            continue
 
         if outcome.result == CLAIMED_NOTHING:
             stop.wait(config.poll_seconds)
 
-    logger.info("worker=%s stopped", config.worker_id)
+
+def _log_queue_depth(session_factory: SessionFactory, config: WorkerConfig) -> None:
+    """Periodic operational readout: what is left, and what is in flight."""
+    try:
+        with session_factory() as db:
+            counts = jobs_repo.count_all_jobs_by_status(db)
+    except Exception:  # noqa: BLE001 - reporting must never stop the worker
+        logger.warning("worker=%s could not read queue depth", config.worker_id)
+        return
+
+    queued = counts.get("queued", 0)
+    running = counts.get("running", 0)
+    if queued or running:
+        logger.info(
+            "worker=%s queue queued=%s running=%s concurrency=%s",
+            config.worker_id,
+            queued,
+            running,
+            config.concurrency,
+        )

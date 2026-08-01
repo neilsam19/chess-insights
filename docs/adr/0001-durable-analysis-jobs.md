@@ -298,6 +298,22 @@ Consequence for tests: a `Session` must not be used from two threads, so
 position. Tests on the shared rollback session use that; the threaded path is
 covered by tests with independent connections.
 
+### Each concurrency slot is its own lease owner (added during CP10)
+
+`ANALYSIS_WORKER_CONCURRENCY` runs N independent slots in one worker process.
+Each slot claims its own jobs and runs its own engine, so the setting is a hard
+ceiling on concurrent Stockfish processes however much work is queued.
+
+Slots must be **distinguishable as lease owners**, so slot *i* claims under
+`{worker_id}#{i}` (slot 0 keeps the bare id). Ownership is enforced by matching
+`claimed_by` in every mutation; if two slots shared an id, each could believe it
+owned the other's job and the checks that make at-least-once execution safe
+would quietly stop working — the worst kind of failure, because nothing would
+look broken.
+
+A slot that raises is logged and continues rather than exiting. One bad job must
+not halve the worker's capacity until somebody notices.
+
 ### Manual retry is stricter than the transition table
 
 `ALLOWED_TRANSITIONS` permits `running → queued`, but that edge belongs to the

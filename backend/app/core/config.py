@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     # Unset worker id means "derive one from host and pid", which is what makes
     # lease ownership meaningful when more than one worker is running.
     analysis_worker_id: str | None = None
+    # How many games the worker analyses at once. Bounded by configuration and
+    # never derived from how much work is submitted - queueing 500 games must
+    # start this many engines, not 500.
+    #
+    # Approximate CPU demand is `concurrency x STOCKFISH_THREADS`, and memory
+    # roughly `concurrency x STOCKFISH_HASH_MB`. Default 1 is the safe local
+    # choice: analysis stays responsive and nothing competes for cores.
+    analysis_worker_concurrency: int = 1
     # How long a claim stays valid without a heartbeat. Comfortably longer than
     # the time one position takes, so a slow position never looks like a dead
     # worker. The sweep that acts on expiry arrives in Checkpoint 4.

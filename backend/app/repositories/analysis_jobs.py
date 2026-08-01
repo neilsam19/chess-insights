@@ -595,6 +595,14 @@ def retry_job(db: Session, *, job_id: uuid.UUID, extra_attempts: int = 1) -> Ana
     return job
 
 
+def count_all_jobs_by_status(db: Session) -> dict[str, int]:
+    """Queue depth across every batch, for operational reporting only."""
+    rows: Iterable[tuple[str, int]] = db.execute(
+        select(AnalysisJob.status, func.count()).group_by(AnalysisJob.status)
+    ).all()
+    return {status: count for status, count in rows}
+
+
 def count_jobs_by_status(db: Session, batch_id: uuid.UUID) -> dict[str, int]:
     """Per-status job counts, for deriving batch state without loading rows."""
     rows: Iterable[tuple[str, int]] = db.execute(
@@ -614,6 +622,7 @@ __all__ = [
     "cancel_job",
     "claim_next_job",
     "complete_job",
+    "count_all_jobs_by_status",
     "count_jobs_by_status",
     "create_batch",
     "enqueue_job",
