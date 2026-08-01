@@ -179,6 +179,35 @@ def find_active_job(db: Session, *, game_id: uuid.UUID, config_hash: str) -> Ana
     return db.execute(stmt).scalars().first()
 
 
+def find_active_job_for_game(db: Session, game_id: uuid.UUID) -> AnalysisJob | None:
+    """Any queued or running job for this game, whatever its configuration.
+
+    `find_active_job` answers "is this exact work already queued?" for the
+    enqueue decision. This one answers "is anything happening to this game?"
+    for display, which is a different question.
+    """
+    stmt = (
+        select(AnalysisJob)
+        .where(
+            AnalysisJob.game_id == game_id,
+            AnalysisJob.status.in_(JOB_ACTIVE_STATUSES),
+        )
+        .order_by(AnalysisJob.created_at.desc(), AnalysisJob.id.desc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
+
+
+def latest_job_for_game(db: Session, game_id: uuid.UUID) -> AnalysisJob | None:
+    stmt = (
+        select(AnalysisJob)
+        .where(AnalysisJob.game_id == game_id)
+        .order_by(AnalysisJob.created_at.desc(), AnalysisJob.id.desc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
+
+
 def list_jobs_for_batch(db: Session, batch_id: uuid.UUID) -> list[AnalysisJob]:
     stmt = (
         select(AnalysisJob)
@@ -590,7 +619,9 @@ __all__ = [
     "enqueue_job",
     "fail_job",
     "find_active_job",
+    "find_active_job_for_game",
     "find_stale_jobs",
+    "latest_job_for_game",
     "get_batch",
     "get_job",
     "heartbeat_job",

@@ -11,10 +11,16 @@ import uuid
 
 from sqlalchemy import select, text
 
-from app.models.analysis_job import JOB_COMPLETE, JOB_QUEUED, JOB_RUNNING, AnalysisJob
+from app.models.analysis_job import (
+    JOB_CANCELLED,
+    JOB_COMPLETE,
+    JOB_QUEUED,
+    JOB_RUNNING,
+    AnalysisJob,
+)
 from app.repositories import analysis_jobs as jobs_repo
 from app.worker import runner
-from app.worker.runner import COMPLETED, WorkerConfig
+from app.worker.runner import CANCELLED, COMPLETED, WorkerConfig
 from app.worker.sweeper import recover_stale_jobs
 from fake_engine import FakeEngine
 
@@ -163,6 +169,49 @@ def test_the_renewal_thread_stops_when_the_job_does(committed_db) -> None:
     still_released = fresh.get(AnalysisJob, job.id)
     assert still_released.lease_expires_at is None
     assert still_released.claimed_by is None
+
+
+def test_cancelling_from_another_connection_stops_a_threaded_worker(committed_db) -> None:
+    """Cancellation as it actually happens in production.
+
+    The API sets the flag on its own connection; the worker only learns about
+    it through the background heartbeat. Every other cancellation test runs
+    with renewal inline (heartbeat_seconds=0), which is not the path a real
+    worker takes - so this is the one that proves the threaded path works.
+    """
+    setup = committed_db.session()
+    game, job = _queue_real_game(committed_db, setup, move_count=12)
+
+    cancel_config = WorkerConfig(
+        worker_id="cancellable-worker",
+        lease_seconds=60,
+        poll_seconds=0.01,
+        depth=4,
+        heartbeat_seconds=0.1,
+    )
+
+    api = committed_db.session()
+
+    def cancel_partway(call_number: int) -> None:
+        if call_number == 2:
+            jobs_repo.cancel_job(api, job_id=job.id)
+            api.commit()
+        # Give the heartbeat thread time to notice, as a slow position would.
+        time.sleep(0.15)
+
+    engine = FakeEngine(on_evaluate=cancel_partway)
+    outcome = runner.run_once(config=cancel_config, engine_factory=lambda: engine)
+
+    assert outcome.result == CANCELLED, (
+        f"worker did not stop for a cancellation it learned about via the "
+        f"heartbeat thread (got {outcome.result})"
+    )
+    assert engine.call_count < game.move_count + 1
+
+    fresh = committed_db.session()
+    stored = fresh.get(AnalysisJob, job.id)
+    assert stored.status == JOB_CANCELLED
+    assert stored.claimed_by is None
 
 
 def test_a_worker_commits_its_result_for_another_connection_to_see(committed_db) -> None:

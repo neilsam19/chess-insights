@@ -89,9 +89,29 @@ regardless of which side you played. Centipawn and mate scores stay distinct
 (`+0.74`, `M3`, `Checkmate`) - mate is never flattened into a large fake
 centipawn number.
 
-Analysis is synchronous for now: the request stays open until the game
-finishes, which is fine for one game at a time. Background jobs, bulk
-analysis, and cancellation are a later sprint.
+Analysis is **durable background work**. Pressing Analyze Game queues a job and
+returns immediately; a separate worker process picks it up and runs Stockfish.
+The page shows queued, then per-position progress, and you can navigate away,
+reload, or close the tab without losing the job. Cancel and retry are
+available while a job is active or after it failed.
+
+Because the work outlives the request, it also survives a crash: a worker that
+dies mid-game leaves a lease that expires, and the next worker to start
+recovers the job and re-runs it from the first position.
+
+### Running the worker
+
+`.\dev.ps1` starts it alongside the API and frontend. To run it on its own:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m app.worker            # poll until stopped (Ctrl+C)
+python -m app.worker --once     # process at most one job, then exit
+```
+
+The API never starts an engine, so **the worker is what needs
+`STOCKFISH_PATH`**. Without a worker running, jobs simply stay queued.
 
 ### Installing Stockfish
 
@@ -252,8 +272,8 @@ pytest -m stockfish_integration      # only the real-engine tests
 pytest -m "not stockfish_integration"  # everything else
 ```
 
-Without an engine configured you should see `175 passed, 5 skipped`; with one,
-`180 passed`.
+Without an engine configured you should see `331 passed, 6 skipped`; with one,
+`337 passed`.
 
 Frontend (from `frontend/`):
 

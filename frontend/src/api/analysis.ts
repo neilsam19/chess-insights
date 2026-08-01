@@ -1,5 +1,5 @@
 import { LibraryError } from "./library";
-import type { EngineStatus, GameAnalysis } from "../types/analysis";
+import type { EngineStatus, GameAnalysis, JobStatus } from "../types/analysis";
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8001";
@@ -31,22 +31,70 @@ export async function getGameAnalysis(gameId: string): Promise<GameAnalysis> {
 }
 
 /**
- * Requests analysis of one saved game. Sends no body at all - positions,
- * engine identity, and depth are entirely server-side.
+ * Queues analysis of one saved game. Sends no body at all - positions, engine
+ * identity, and depth are entirely server-side.
  *
- * Synchronous for Sprint 4: this request stays open for the duration of the
- * engine run.
+ * Returns as soon as the job is durably recorded, so the response is normally
+ * `queued` rather than a finished analysis. A separate worker does the work;
+ * poll `getGameAnalysis` for the result.
+ *
+ * 409 is not treated specially here: the server returns the game's current
+ * state alongside it, so "already queued" and "just queued" render the same.
  */
 export async function analyzeGame(gameId: string): Promise<GameAnalysis> {
   const response = await fetch(`${API_BASE_URL}/api/games/${gameId}/analysis`, {
     method: "POST",
   });
 
-  if (!response.ok) {
+  // 202 queued, 200 reused, 409 already active - all describe the same game
+  // state and all carry a GameAnalysis body.
+  if (!response.ok && response.status !== 409) {
     return throwForResponse(response);
   }
 
   return (await response.json()) as GameAnalysis;
+}
+
+export async function getJob(jobId: string): Promise<JobStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/analysis/jobs/${jobId}`);
+
+  if (!response.ok) {
+    return throwForResponse(response);
+  }
+
+  return (await response.json()) as JobStatus;
+}
+
+/**
+ * Asks a job to stop. A queued job is cancelled at once; a running one stops
+ * at its next position boundary, so the reported status may briefly still be
+ * `running` afterwards.
+ */
+export async function cancelJob(jobId: string): Promise<JobStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/analysis/jobs/${jobId}/cancel`,
+    { method: "POST" },
+  );
+
+  if (!response.ok) {
+    return throwForResponse(response);
+  }
+
+  return (await response.json()) as JobStatus;
+}
+
+/** Queues another attempt at a failed or cancelled job. */
+export async function retryJob(jobId: string): Promise<JobStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/analysis/jobs/${jobId}/retry`,
+    { method: "POST" },
+  );
+
+  if (!response.ok) {
+    return throwForResponse(response);
+  }
+
+  return (await response.json()) as JobStatus;
 }
 
 export async function getEngineStatus(): Promise<EngineStatus> {

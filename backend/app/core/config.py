@@ -28,7 +28,13 @@ class Settings(BaseSettings):
     # How often the lease is renewed while a job runs. Must be comfortably
     # smaller than the lease itself: renewal happens on a background thread, so
     # a single slow position cannot let its own lease expire.
-    analysis_heartbeat_seconds: float = 5.0
+    #
+    # This also bounds how quickly a worker notices a cancellation, since it
+    # learns about one from the same heartbeat - which is why it is 2s rather
+    # than something lazier. One single-row update every two seconds per
+    # running job is nothing; a cancel that takes five seconds to be noticed
+    # reads to a user as a button that did not work.
+    analysis_heartbeat_seconds: float = 2.0
     # How long to wait before polling again when the queue is empty.
     analysis_poll_seconds: float = 2.0
     # How often to look for jobs abandoned by a dead worker.

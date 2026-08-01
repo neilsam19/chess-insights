@@ -21,8 +21,10 @@ from app.core.config import settings
 from app.models.analysis_run import STATUS_COMPLETE
 from app.models.game import Game
 from app.repositories import analysis as analysis_repo
+from app.repositories import analysis_jobs as jobs_repo
 from app.services.engine import build_stockfish_engine, engine_session
-from app.services.game_analysis_service import analyze_game
+from app.worker import runner
+from app.worker.runner import COMPLETED, WorkerConfig
 from sample_data import SAMPLE_PGN_BYTES
 
 pytestmark = [
@@ -87,19 +89,46 @@ def test_real_engine_evaluates_the_starting_position() -> None:
     assert evaluation.depth_reached is not None
 
 
+def _analyze_with_real_engine(client: TestClient, db_session, session_factory, game: Game):
+    """Queue a game and run one worker pass over it with the real binary."""
+    batch = jobs_repo.create_batch(
+        db_session,
+        upload_id=game.upload_id,
+        engine_config_hash="integration",
+        requested_depth=TEST_DEPTH,
+        engine_options={"Threads": settings.stockfish_threads},
+    )
+    job = jobs_repo.enqueue_job(
+        db_session,
+        batch_id=batch.id,
+        game_id=game.id,
+        config_hash=f"integration-{game.id}",
+        total_positions=game.move_count + 1,
+    )
+
+    outcome = runner.run_once(
+        config=WorkerConfig(
+            worker_id="integration-worker",
+            lease_seconds=120,
+            poll_seconds=0.01,
+            depth=TEST_DEPTH,
+            heartbeat_seconds=0.0,
+        ),
+        session_factory=session_factory,
+        engine_factory=build_stockfish_engine,
+    )
+    assert outcome.result == COMPLETED
+    assert outcome.job_id == job.id
+    return job, jobs_repo.latest_run_for_job(db_session, job.id)
+
+
 def test_real_engine_analyzes_a_saved_game_end_to_end(
     client: TestClient, db_session, session_factory
 ) -> None:
     game = _shortest_saved_game(client, db_session)
 
-    result = analyze_game(
-        game.id,
-        session_factory=session_factory,
-        engine_factory=build_stockfish_engine,
-        depth=TEST_DEPTH,
-    )
+    job, run = _analyze_with_real_engine(client, db_session, session_factory, game)
 
-    run = analysis_repo.get_analysis_run(db_session, result.run_id)
     assert run.status == STATUS_COMPLETE
     assert run.completed_at is not None
     assert run.error_message is None
@@ -108,6 +137,7 @@ def test_real_engine_analyzes_a_saved_game_end_to_end(
     assert run.engine_name
     assert run.requested_depth == TEST_DEPTH
     assert run.engine_options["Threads"] == settings.stockfish_threads
+    assert run.attempt_number == 1
 
     evaluations = analysis_repo.list_position_evaluations_for_run(db_session, run.id)
     assert len(evaluations) == game.move_count + 1
@@ -127,15 +157,9 @@ def test_real_engine_finds_mate_in_a_finished_game(
     be reported as mate rather than a centipawn score."""
     game = _shortest_saved_game(client, db_session)
 
-    result = analyze_game(
-        game.id,
-        session_factory=session_factory,
-        engine_factory=build_stockfish_engine,
-        depth=TEST_DEPTH,
-    )
+    _, run = _analyze_with_real_engine(client, db_session, session_factory, game)
 
-    evaluations = analysis_repo.list_position_evaluations_for_run(db_session, result.run_id)
-    final = evaluations[-1]
+    final = analysis_repo.list_position_evaluations_for_run(db_session, run.id)[-1]
 
     assert final.mate_in_white is not None
     assert final.score_cp_white is None
@@ -150,61 +174,46 @@ def test_engine_status_endpoint_reports_the_real_engine(client: TestClient) -> N
     assert body["detail"] is None
 
 
-def test_the_worker_analyzes_a_queued_game_with_the_real_engine(
+def test_the_whole_sprint_5_path_works_with_the_real_engine(
     client: TestClient, db_session, session_factory
 ) -> None:
-    """The full Sprint 5 path against the real binary: queue a job, run one
-    worker pass, and get a durable result - with no HTTP request open for the
-    duration of the analysis."""
-    from app.models.analysis_job import JOB_COMPLETE
-    from app.repositories import analysis_jobs as jobs_repo
-    from app.worker import runner
-    from app.worker.runner import COMPLETED, WorkerConfig
+    """API to worker to API, against the real binary.
 
+    The request returns while the game is still queued - no HTTP connection is
+    held for the duration of the analysis - and the same endpoint later reports
+    the finished result.
+    """
     game = _shortest_saved_game(client, db_session)
 
-    batch = jobs_repo.create_batch(
-        db_session,
-        upload_id=game.upload_id,
-        engine_config_hash="e" * 64,
-        requested_depth=TEST_DEPTH,
-        engine_options={"Threads": settings.stockfish_threads},
-    )
-    job = jobs_repo.enqueue_job(
-        db_session,
-        batch_id=batch.id,
-        game_id=game.id,
-        config_hash="worker-integration",
-        total_positions=game.move_count + 1,
-    )
+    queued = client.post(f"/api/games/{game.id}/analysis")
+    assert queued.status_code == 202
+    assert queued.json()["status"] == "queued"
+    # Nothing was analyzed by the request itself.
+    assert analysis_repo.get_latest_complete_run_for_game(db_session, game.id) is None
 
+    # The configured depth, not TEST_DEPTH: the endpoint queued this job at the
+    # configured depth, and analysing it at a different one would produce a run
+    # that correctly does not match - which would make the reuse check below
+    # fail for a reason that cannot happen in production.
     outcome = runner.run_once(
         config=WorkerConfig(
             worker_id="integration-worker",
             lease_seconds=120,
             poll_seconds=0.01,
-            depth=TEST_DEPTH,
+            depth=settings.stockfish_depth,
+            heartbeat_seconds=0.0,
         ),
         session_factory=session_factory,
         engine_factory=build_stockfish_engine,
     )
-
     assert outcome.result == COMPLETED
-    assert outcome.job_id == job.id
 
-    db_session.refresh(job)
-    assert job.status == JOB_COMPLETE
-    assert job.completed_positions == game.move_count + 1
+    body = client.get(f"/api/games/{game.id}/analysis").json()
+    assert body["status"] == "complete"
+    assert len(body["evaluations"]) == game.move_count + 1
+    assert body["engine"]["name"]
 
-    run = jobs_repo.latest_run_for_job(db_session, job.id)
-    assert run.status == STATUS_COMPLETE
-    assert run.attempt_number == 1
-    # Provenance comes from the live engine, not from the job's config summary.
-    assert run.engine_name
-
-    evaluations = analysis_repo.list_position_evaluations_for_run(db_session, run.id)
-    assert len(evaluations) == game.move_count + 1
-    for evaluation in evaluations:
-        has_cp = evaluation.score_cp_white is not None
-        has_mate = evaluation.mate_in_white is not None
-        assert has_cp != has_mate, f"ply {evaluation.ply} has an ambiguous score"
+    # Asking again reuses the finished analysis rather than burning engine time.
+    again = client.post(f"/api/games/{game.id}/analysis")
+    assert again.status_code == 200
+    assert again.json()["run_id"] == body["run_id"]

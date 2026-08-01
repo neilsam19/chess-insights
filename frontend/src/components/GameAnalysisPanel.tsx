@@ -1,9 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
-import { analyzeGame, getGameAnalysis } from "../api/analysis";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { analyzeGame, cancelJob, getGameAnalysis, retryJob } from "../api/analysis";
 import { LibraryError } from "../api/library";
 import type { GameAnalysis } from "../types/analysis";
+import { isActive } from "../types/analysis";
 import { describeScore, formatScore, plyLabel } from "../utils/evaluation";
 import { EvaluationGraph } from "./EvaluationGraph";
+
+/** How often to ask the server for progress while a job is active. */
+const POLL_INTERVAL_MS = 1500;
+/**
+ * After a failed poll the interval doubles, up to this. A dropped connection
+ * should not turn into a request storm, and analysis keeps running on the
+ * server regardless of whether we are watching.
+ */
+const MAX_POLL_INTERVAL_MS = 15000;
 
 interface GameAnalysisPanelProps {
   /** Persisted game id. Only saved games can be analyzed. */
@@ -19,8 +29,15 @@ export function GameAnalysisPanel({
 }: GameAnalysisPanelProps) {
   const [analysis, setAnalysis] = useState<GameAnalysis | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pollingStalled, setPollingStalled] = useState(false);
+
+  // Held in a ref rather than state: changing the backoff must not re-render,
+  // and the poll loop needs the current value without re-subscribing.
+  const backoffRef = useRef(POLL_INTERVAL_MS);
+
+  const active = isActive(analysis);
 
   // The panel is keyed by gameId where it is mounted, so selecting a
   // different game remounts it with fresh state. That is why this effect
@@ -44,21 +61,85 @@ export function GameAnalysisPanel({
     };
   }, [gameId]);
 
-  const runAnalysis = useCallback(async () => {
-    setIsAnalyzing(true);
-    setError(null);
-    try {
-      setAnalysis(await analyzeGame(gameId));
-    } catch (err) {
-      setError(
-        err instanceof LibraryError
-          ? err.message
-          : "Something went wrong while analyzing this game.",
-      );
-    } finally {
-      setIsAnalyzing(false);
+  // Poll only while a worker might still change the outcome. Terminal states
+  // stop the timer entirely rather than idling against the server.
+  useEffect(() => {
+    if (!active) {
+      // Only the ref is reset here. Clearing `pollingStalled` would be a
+      // synchronous setState inside an effect, which cascades renders; the
+      // banner is gated on `active` when rendering instead, and the flag is
+      // cleared by the action that starts new work.
+      backoffRef.current = POLL_INTERVAL_MS;
+      return;
     }
-  }, [gameId]);
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const poll = async () => {
+      try {
+        const result = await getGameAnalysis(gameId);
+        if (cancelled) return;
+        backoffRef.current = POLL_INTERVAL_MS;
+        setPollingStalled(false);
+        setAnalysis(result);
+      } catch {
+        if (cancelled) return;
+        // A failed poll is a connection problem, never an analysis failure -
+        // the job is still running on the server.
+        backoffRef.current = Math.min(backoffRef.current * 2, MAX_POLL_INTERVAL_MS);
+        setPollingStalled(true);
+      }
+      if (!cancelled) {
+        timer = setTimeout(poll, backoffRef.current);
+      }
+    };
+
+    timer = setTimeout(poll, backoffRef.current);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [active, gameId]);
+
+  const runCommand = useCallback(
+    async (command: () => Promise<unknown>, failureMessage: string) => {
+      setIsBusy(true);
+      setError(null);
+      setPollingStalled(false);
+      try {
+        await command();
+        setAnalysis(await getGameAnalysis(gameId));
+      } catch (err) {
+        setError(err instanceof LibraryError ? err.message : failureMessage);
+      } finally {
+        setIsBusy(false);
+      }
+    },
+    [gameId],
+  );
+
+  const startAnalysis = useCallback(
+    () =>
+      runCommand(
+        () => analyzeGame(gameId),
+        "Something went wrong while queueing this analysis.",
+      ),
+    [gameId, runCommand],
+  );
+
+  const stopAnalysis = useCallback(
+    (jobId: string) =>
+      runCommand(() => cancelJob(jobId), "Could not cancel this analysis."),
+    [runCommand],
+  );
+
+  const retryAnalysis = useCallback(
+    (jobId: string) =>
+      runCommand(() => retryJob(jobId), "Could not retry this analysis."),
+    [runCommand],
+  );
 
   if (isLoading) {
     return (
@@ -67,10 +148,6 @@ export function GameAnalysisPanel({
       </section>
     );
   }
-
-  // The request is synchronous, so this covers both "we are waiting" and a
-  // run left behind by a previous session.
-  const showAnalyzing = isAnalyzing || analysis?.status === "running";
 
   return (
     <section className="analysis-panel">
@@ -82,39 +159,66 @@ export function GameAnalysisPanel({
         </p>
       )}
 
-      {showAnalyzing && (
+      {analysis?.status === "not_analyzed" && (
         <div className="analysis-status">
-          <span className="analysis-spinner" aria-hidden="true" />
-          <span role="status">Analyzing game...</span>
-          <button type="button" disabled>
-            Analyzing...
-          </button>
-        </div>
-      )}
-
-      {!showAnalyzing && analysis?.status === "not_analyzed" && (
-        <div className="analysis-status">
-          <button type="button" onClick={runAnalysis}>
+          <button type="button" onClick={startAnalysis} disabled={isBusy}>
             Analyze Game
           </button>
           <span className="analysis-note">
-            Stockfish evaluates every position, which can take a moment.
+            Stockfish evaluates every position. This runs in the background, so
+            you can keep browsing.
           </span>
         </div>
       )}
 
-      {!showAnalyzing && analysis?.status === "failed" && (
+      {(analysis?.status === "queued" || analysis?.status === "running") && (
+        <ActiveAnalysis
+          analysis={analysis}
+          isBusy={isBusy}
+          stalled={active && pollingStalled}
+          onCancel={stopAnalysis}
+        />
+      )}
+
+      {analysis?.status === "failed" && (
         <div className="analysis-status">
           <p className="upload-error" role="alert">
             {analysis.error_message ?? "Analysis failed."}
           </p>
-          <button type="button" onClick={runAnalysis}>
-            Retry Analysis
+          {analysis.can_retry && analysis.job_id ? (
+            <button
+              type="button"
+              onClick={() => retryAnalysis(analysis.job_id as string)}
+              disabled={isBusy}
+            >
+              Retry Analysis
+            </button>
+          ) : (
+            <button type="button" onClick={startAnalysis} disabled={isBusy}>
+              Analyze Game
+            </button>
+          )}
+        </div>
+      )}
+
+      {analysis?.status === "cancelled" && (
+        <div className="analysis-status">
+          <span role="status">Analysis cancelled.</span>
+          <button
+            type="button"
+            onClick={() =>
+              analysis.can_retry
+                ? retryAnalysis(analysis.job_id)
+                : startAnalysis()
+            }
+            disabled={isBusy}
+          >
+            Analyze Game
           </button>
         </div>
       )}
 
-      {!showAnalyzing && analysis?.status === "complete" && (
+      {analysis?.status === "complete" && (
         <CompleteAnalysis
           analysis={analysis}
           currentPly={currentPly}
@@ -122,6 +226,74 @@ export function GameAnalysisPanel({
         />
       )}
     </section>
+  );
+}
+
+interface ActiveAnalysisProps {
+  analysis: Extract<GameAnalysis, { status: "queued" | "running" }>;
+  isBusy: boolean;
+  stalled: boolean;
+  onCancel: (jobId: string) => void;
+}
+
+function ActiveAnalysis({
+  analysis,
+  isBusy,
+  stalled,
+  onCancel,
+}: ActiveAnalysisProps) {
+  const progress = analysis.progress;
+  const queued = analysis.status === "queued";
+  const cancelling = analysis.status === "running" && analysis.cancel_requested;
+
+  return (
+    <div className="analysis-status">
+      <span className="analysis-spinner" aria-hidden="true" />
+      <span role="status">
+        {cancelling
+          ? "Cancelling - finishing the current position..."
+          : queued
+            ? "Queued for analysis..."
+            : `Analyzing position ${progress?.completed_positions ?? 0} of ${
+                progress?.total_positions ?? 0
+              }...`}
+      </span>
+
+      {progress && !queued && !cancelling && (
+        <progress
+          className="analysis-progress"
+          value={progress.completed_positions}
+          max={progress.total_positions}
+          aria-label="Analysis progress"
+        />
+      )}
+
+      {progress && progress.attempt > 1 && !cancelling && (
+        <span className="analysis-note">
+          Attempt {progress.attempt} of {progress.max_attempts}
+        </span>
+      )}
+
+      {analysis.job_id && (
+        <button
+          type="button"
+          onClick={() => onCancel(analysis.job_id as string)}
+          // Stays visible but inert once cancellation is under way: removing
+          // it would look like the click was lost, and asking twice achieves
+          // nothing.
+          disabled={isBusy || !analysis.can_cancel}
+        >
+          {cancelling ? "Cancelling..." : "Cancel"}
+        </button>
+      )}
+
+      {stalled && (
+        <span className="analysis-note">
+          Lost contact with the server - still trying. Analysis continues in the
+          background.
+        </span>
+      )}
+    </div>
   );
 }
 

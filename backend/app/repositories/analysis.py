@@ -60,6 +60,22 @@ def get_latest_analysis_run_for_game(db: Session, game_id: uuid.UUID) -> Analysi
     return db.execute(stmt).scalar_one_or_none()
 
 
+def get_latest_complete_run_for_game(db: Session, game_id: uuid.UUID) -> AnalysisRun | None:
+    """The newest run that actually produced evaluations.
+
+    Distinct from `get_latest_analysis_run_for_game`: a failed retry is more
+    recent but has no results, and hiding a good analysis behind it would be
+    worse than useless.
+    """
+    stmt = (
+        select(AnalysisRun)
+        .where(AnalysisRun.game_id == game_id, AnalysisRun.status == STATUS_COMPLETE)
+        .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id.desc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
 def get_run_with_evaluations(db: Session, run_id: uuid.UUID) -> AnalysisRun | None:
     stmt = (
         select(AnalysisRun)

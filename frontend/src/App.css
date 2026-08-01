@@ -214,6 +214,15 @@
   color: var(--text);
 }
 
+/* Sized to sit inline with the status text rather than stretching across the
+   panel, which would read as more important than the evaluation graph. */
+.analysis-progress {
+  flex: 1 1 140px;
+  max-width: 240px;
+  height: 6px;
+  accent-color: var(--accent);
+}
+
 .analysis-current {
   display: flex;
   align-items: baseline;
