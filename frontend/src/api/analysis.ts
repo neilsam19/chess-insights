@@ -1,5 +1,11 @@
 import { LibraryError } from "./library";
-import type { EngineStatus, GameAnalysis, JobStatus } from "../types/analysis";
+import type {
+  BatchCreated,
+  BatchStatus,
+  EngineStatus,
+  GameAnalysis,
+  JobStatus,
+} from "../types/analysis";
 
 const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8001";
@@ -53,6 +59,49 @@ export async function analyzeGame(gameId: string): Promise<GameAnalysis> {
   }
 
   return (await response.json()) as GameAnalysis;
+}
+
+/**
+ * Queues every game in an upload that still needs analysing.
+ *
+ * Safe to call twice: games with a matching completed analysis are skipped and
+ * games already queued are left alone. 200 means nothing needed doing.
+ */
+export async function analyzeUpload(uploadId: string): Promise<BatchCreated> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/uploads/${uploadId}/analysis`,
+    { method: "POST" },
+  );
+
+  if (!response.ok) {
+    return throwForResponse(response);
+  }
+
+  return (await response.json()) as BatchCreated;
+}
+
+export async function getBatch(batchId: string): Promise<BatchStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/analysis/batches/${batchId}`);
+
+  if (!response.ok) {
+    return throwForResponse(response);
+  }
+
+  return (await response.json()) as BatchStatus;
+}
+
+/** Stops everything unfinished. Games already analysed keep their results. */
+export async function cancelBatch(batchId: string): Promise<BatchStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/analysis/batches/${batchId}/cancel`,
+    { method: "POST" },
+  );
+
+  if (!response.ok) {
+    return throwForResponse(response);
+  }
+
+  return (await response.json()) as BatchStatus;
 }
 
 export async function getJob(jobId: string): Promise<JobStatus> {

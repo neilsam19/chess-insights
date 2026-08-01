@@ -99,6 +99,18 @@ Because the work outlives the request, it also survives a crash: a worker that
 dies mid-game leaves a lease that expires, and the next worker to start
 recovers the job and re-runs it from the first position.
 
+### Analysing a whole upload
+
+A saved analysis has an **Analyze All Games** action that queues every game
+still needing analysis in one request, then shows aggregate progress across the
+upload. Games are still analysed one at a time by the worker, so queueing 79
+games starts one engine, not 79.
+
+The action is safe to press twice: games with a matching completed analysis are
+skipped and games already queued are left alone, and the response says how many
+of each. **Cancel All** stops everything unfinished while keeping the games that
+already completed.
+
 ### Running the worker
 
 `.\dev.ps1` starts it alongside the API and frontend. To run it on its own:
@@ -272,8 +284,8 @@ pytest -m stockfish_integration      # only the real-engine tests
 pytest -m "not stockfish_integration"  # everything else
 ```
 
-Without an engine configured you should see `331 passed, 6 skipped`; with one,
-`337 passed`.
+Without an engine configured you should see `365 passed, 6 skipped`; with one,
+`371 passed`.
 
 Frontend (from `frontend/`):
 

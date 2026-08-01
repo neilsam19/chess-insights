@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { DashboardSummary } from "../components/DashboardSummary";
 import { GameList } from "../components/GameList";
 import { ChessGameViewer } from "../components/ChessGameViewer";
+import { UploadAnalysisPanel } from "../components/UploadAnalysisPanel";
 import { LibraryError, getGame, getUpload, getUploadGames, getUploadStats } from "../api/library";
 import { gameFromDetail, gameFromSummary } from "../utils/libraryAdapters";
 import type { GameSummary, SavedUpload } from "../types/library";
@@ -148,6 +149,8 @@ export function SavedDashboardPage() {
       )}
 
       <DashboardSummary stats={stats} />
+
+      <UploadAnalysisPanel uploadId={upload.id} totalGames={upload.game_count} />
 
       <div className="games-section">
         <div>

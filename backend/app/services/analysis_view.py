@@ -12,10 +12,14 @@ way aggregate statistics are always derived rather than stored.
 
 from sqlalchemy.orm import Session
 
+from app.models.analysis_batch import AnalysisBatch
 from app.models.analysis_job import (
     JOB_ACTIVE_STATUSES,
     JOB_CANCELLED,
+    JOB_COMPLETE,
+    JOB_FAILED,
     JOB_QUEUED,
+    JOB_RUNNING,
     AnalysisJob,
 )
 from app.models.analysis_run import STATUS_CANCELLED, STATUS_RUNNING, AnalysisRun
@@ -25,6 +29,8 @@ from app.repositories import analysis as analysis_repo
 from app.repositories import analysis_jobs as jobs_repo
 from app.repositories.analysis_jobs import RETRYABLE_FROM
 from app.schemas.analysis import (
+    BatchCountsOut,
+    BatchStatusOut,
     CancelledAnalysisOut,
     CompleteAnalysisOut,
     EngineMetadataOut,
@@ -37,9 +43,12 @@ from app.schemas.analysis import (
     RunningAnalysisOut,
     ScoreOut,
 )
+from app.services.analysis_batches import derive_batch_status
 
 WHITE = "white"
 BLACK = "black"
+
+BATCH_COUNT_KEYS = (JOB_QUEUED, JOB_RUNNING, JOB_COMPLETE, JOB_FAILED, JOB_CANCELLED)
 
 
 def perspective_for_game(game: Game) -> str:
@@ -141,6 +150,47 @@ def job_status_out(job: AnalysisJob) -> JobStatusOut:
             job.status in JOB_ACTIVE_STATUSES and job.cancel_requested_at is None
         ),
         can_retry=job.status in RETRYABLE_FROM,
+    )
+
+
+def batch_status_out(db: Session, batch: AnalysisBatch) -> BatchStatusOut:
+    """A batch's live state, derived from its jobs rather than read from it.
+
+    Progress is aggregated across every job, so one long game does not make the
+    whole upload look stuck at 0%.
+    """
+    jobs = jobs_repo.list_jobs_for_batch(db, batch.id)
+    counts: dict[str, int] = {}
+    for job in jobs:
+        counts[job.status] = counts.get(job.status, 0) + 1
+
+    total_positions = sum(job.total_positions for job in jobs)
+    completed_positions = sum(
+        job.total_positions if job.status == JOB_COMPLETE else job.completed_positions
+        for job in jobs
+    )
+    status = derive_batch_status(counts)
+
+    return BatchStatusOut(
+        batch_id=batch.id,
+        upload_id=batch.upload_id,
+        status=status,
+        counts=BatchCountsOut(**{key: counts.get(key, 0) for key in BATCH_COUNT_KEYS}),
+        total_jobs=len(jobs),
+        completed_positions=completed_positions,
+        total_positions=total_positions,
+        percent=(
+            int(round(100 * completed_positions / total_positions))
+            if total_positions
+            else 0
+        ),
+        games_complete=counts.get(JOB_COMPLETE, 0),
+        created_at=batch.created_at,
+        started_at=batch.started_at,
+        completed_at=batch.completed_at,
+        cancel_requested=batch.cancel_requested_at is not None,
+        can_cancel=any(job.status in JOB_ACTIVE_STATUSES for job in jobs),
+        failed_game_ids=[job.game_id for job in jobs if job.status == JOB_FAILED],
     )
 
 

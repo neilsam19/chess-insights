@@ -37,7 +37,7 @@ from app.models.analysis_job import AnalysisJob
 from app.models.analysis_run import STATUS_RUNNING
 from app.repositories import analysis as analysis_repo
 from app.repositories import analysis_jobs as jobs_repo
-from app.services import analysis_errors
+from app.services import analysis_batches, analysis_errors
 from app.services.analysis_executor import (
     AnalysisAbandoned,
     evaluate_positions,
@@ -119,6 +119,18 @@ def _default_session() -> ContextManager[Session]:
     return SessionLocal()
 
 
+def _refresh_batch(db: Session, job_id: uuid.UUID) -> None:
+    """Keep the parent batch's cached status in step with its jobs.
+
+    Called inside the same transaction as the job transition, so the two can
+    never be committed apart. Batch reads derive from the jobs anyway, so this
+    failing is not corrupting - it just leaves a stale cache.
+    """
+    job = jobs_repo.get_job(db, job_id)
+    if job is not None:
+        analysis_batches.refresh_batch_status(db, job.batch_id)
+
+
 def _fail(
     session_factory: SessionFactory,
     *,
@@ -172,6 +184,7 @@ def _fail(
                     error_code=code,
                     error_message=message,
                 )
+            _refresh_batch(db, job_id)
             db.commit()
     except Exception:  # noqa: BLE001 - never mask the original failure
         logger.exception("Could not record failure for job %s", job_id)
@@ -205,6 +218,7 @@ def _cancel(
                     )
 
             jobs_repo.mark_job_cancelled(db, job_id=job_id, worker_id=worker_id)
+            _refresh_batch(db, job_id)
             db.commit()
     except Exception:  # noqa: BLE001
         logger.exception("Could not record cancellation for job %s", job_id)
@@ -358,6 +372,7 @@ def run_once(
             )
             run = analysis_repo.get_analysis_run(db, run_id)
             analysis_repo.mark_analysis_run_complete(db, run)
+            _refresh_batch(db, job_id)
             db.commit()
     except Exception as exc:  # noqa: BLE001
         return _fail(

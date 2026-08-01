@@ -1,12 +1,15 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.repositories import games as game_repo
 from app.repositories import uploads as upload_repo
+from app.schemas.analysis import BatchCreatedOut, EngineSummaryOut
+from app.services import analysis_batches
+from app.services.engine import EngineUnavailableError, resolve_engine_config
 from app.schemas.library import (
     GameSummaryOut,
     PaginatedGameSummariesOut,
@@ -180,6 +183,66 @@ def get_upload(upload_id: uuid.UUID, db: Session = Depends(get_db)) -> UploadOut
     if upload is None:
         raise HTTPException(status_code=404, detail="Upload not found.")
     return UploadOut.model_validate(upload)
+
+
+@router.post(
+    "/uploads/{upload_id}/analysis", response_model=BatchCreatedOut, status_code=202
+)
+def create_upload_analysis(
+    upload_id: uuid.UUID,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> BatchCreatedOut:
+    """Queue every game in an upload that still needs analysing.
+
+    The batch and all its jobs are written in one transaction, then the
+    request returns; the worker does the work at its configured concurrency,
+    so this cannot start an unbounded number of engines however many games are
+    involved.
+
+    Safe to press twice. Games with a matching completed analysis are skipped
+    and games already queued are left alone, and the response says how many of
+    each - so a second press is visibly uneventful rather than silently
+    re-running everything.
+
+      202  at least one game was queued
+      200  nothing needed queueing
+      404  upload not found
+      503  the engine is unusable, and nothing was queued
+    """
+    upload = upload_repo.get_upload(db, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+
+    try:
+        outcome = analysis_batches.enqueue_upload_analysis(db, upload)
+    except EngineUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+    config = resolve_engine_config()
+    status = (
+        analysis_batches.batch_status(db, outcome.batch)
+        if outcome.batch is not None
+        else "complete"
+    )
+    if outcome.queued == 0:
+        response.status_code = 200
+
+    db.commit()
+
+    return BatchCreatedOut(
+        batch_id=outcome.batch.id if outcome.batch is not None else None,
+        upload_id=upload_id,
+        status=status,
+        queued=outcome.queued,
+        skipped_complete=outcome.skipped_complete,
+        already_active=outcome.already_active,
+        ineligible=outcome.ineligible,
+        total_games=outcome.total_games,
+        engine=EngineSummaryOut(
+            requested_depth=config.depth, options=dict(config.options)
+        ),
+    )
 
 
 @router.get("/uploads/{upload_id}/stats", response_model=UploadStatsOut)

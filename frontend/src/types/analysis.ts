@@ -118,6 +118,53 @@ export interface JobStatus {
   can_retry: boolean;
 }
 
+export type BatchStatusName =
+  | "queued"
+  | "running"
+  | "complete"
+  | "partial_failed"
+  | "failed"
+  | "cancelled";
+
+export interface BatchCounts {
+  queued: number;
+  running: number;
+  complete: number;
+  failed: number;
+  cancelled: number;
+}
+
+/** The result of asking for a whole upload to be analysed. */
+export interface BatchCreated {
+  batch_id: string | null;
+  upload_id: string;
+  status: BatchStatusName;
+  queued: number;
+  skipped_complete: number;
+  already_active: number;
+  ineligible: number;
+  total_games: number;
+  engine: { requested_depth: number; options: Record<string, unknown> };
+}
+
+export interface BatchStatus {
+  batch_id: string;
+  upload_id: string | null;
+  status: BatchStatusName;
+  counts: BatchCounts;
+  total_jobs: number;
+  completed_positions: number;
+  total_positions: number;
+  percent: number;
+  games_complete: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cancel_requested: boolean;
+  can_cancel: boolean;
+  failed_game_ids: string[];
+}
+
 /** States where a worker may still change the outcome, so polling continues. */
 export const ACTIVE_STATUSES = ["queued", "running"] as const;
 
@@ -125,6 +172,12 @@ export function isActive(analysis: GameAnalysis | null): boolean {
   return (
     analysis !== null &&
     (ACTIVE_STATUSES as readonly string[]).includes(analysis.status)
+  );
+}
+
+export function isBatchActive(batch: BatchStatus | null): boolean {
+  return (
+    batch !== null && (ACTIVE_STATUSES as readonly string[]).includes(batch.status)
   );
 }
 

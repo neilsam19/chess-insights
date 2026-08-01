@@ -214,6 +214,24 @@
   color: var(--text);
 }
 
+.upload-analysis {
+  margin: 16px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.batch-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--text);
+}
+
 /* Sized to sit inline with the status text rather than stretching across the
    panel, which would read as more important than the evaluation graph. */
 .analysis-progress {

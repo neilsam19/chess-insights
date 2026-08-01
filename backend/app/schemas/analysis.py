@@ -171,14 +171,62 @@ class JobStatusOut(BaseModel):
     can_retry: bool
 
 
-class EnqueuedOut(BaseModel):
-    """What a client gets back when analysis is accepted but not yet done."""
+BatchStatus = Literal[
+    "queued", "running", "complete", "partial_failed", "failed", "cancelled"
+]
 
-    job_id: uuid.UUID
-    game_id: uuid.UUID
+
+class EngineSummaryOut(BaseModel):
+    """Which engine configuration a batch was queued under."""
+
+    requested_depth: int
+    options: dict = Field(default_factory=dict)
+
+
+class BatchCountsOut(BaseModel):
+    queued: int = 0
+    running: int = 0
+    complete: int = 0
+    failed: int = 0
+    cancelled: int = 0
+
+
+class BatchCreatedOut(BaseModel):
+    """The result of asking for a whole upload to be analysed.
+
+    Reports what was *not* queued as well as what was. Pressing the button
+    twice should be safe and obviously uneventful, which only works if the
+    response says how much was skipped.
+    """
+
+    batch_id: uuid.UUID | None = None
+    upload_id: uuid.UUID
+    status: BatchStatus
+    queued: int
+    skipped_complete: int
+    already_active: int
+    ineligible: int
+    total_games: int
+    engine: EngineSummaryOut
+
+
+class BatchStatusOut(BaseModel):
     batch_id: uuid.UUID
-    status: Literal["queued", "running"]
-    progress: JobProgressOut
+    upload_id: uuid.UUID | None = None
+    status: BatchStatus
+    counts: BatchCountsOut
+    total_jobs: int
+    completed_positions: int
+    total_positions: int
+    percent: int
+    games_complete: int
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    cancel_requested: bool = False
+    can_cancel: bool
+    # So the UI can link straight to the games that need attention.
+    failed_game_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class EngineStatusOut(BaseModel):
