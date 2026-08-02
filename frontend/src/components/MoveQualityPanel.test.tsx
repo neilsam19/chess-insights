@@ -253,8 +253,9 @@ describe("move-list annotations", () => {
       ]),
     );
 
-    const missed = screen.getByRole("button", { name: "1. e4, Missed mate" });
-    const blunder = screen.getByRole("button", { name: /^2\. Qh5, Blunder/ });
+    const moveList = within(screen.getByRole("list", { name: "Moves" }));
+    const missed = moveList.getByRole("button", { name: "1. e4, Missed mate" });
+    const blunder = moveList.getByRole("button", { name: /^2\. Qh5, Blunder/ });
 
     expect(missed).toBeInTheDocument();
     expect(blunder).toBeInTheDocument();
@@ -279,7 +280,9 @@ describe("move-list annotations", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "1. e4, Allowed mate" }),
+      within(screen.getByRole("list", { name: "Moves" })).getByRole("button", {
+        name: "1. e4, Allowed mate",
+      }),
     ).toBeInTheDocument();
   });
 });

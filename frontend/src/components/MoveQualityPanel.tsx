@@ -1,14 +1,21 @@
+import { useState } from "react";
 import type {
   CompleteMoveQuality,
   GameMoveQuality,
   MoveQuality,
   NotGradable,
 } from "../types/moveQuality";
+import type { MoveFilter } from "../utils/moveQuality";
 import {
+  FILTER_LABEL,
+  MOVE_FILTERS,
   NO_VALUE,
   describeQuality,
+  filterMoves,
   formatPlayerScore,
   moveAnnotation,
+  nextMovePly,
+  previousMovePly,
 } from "../utils/moveQuality";
 import { StatCard } from "./StatCard";
 
@@ -20,12 +27,15 @@ interface MoveQualityPanelProps {
    */
   moveQuality: GameMoveQuality | null;
   currentPly: number;
+  /** Absent for a read-only render; supplied by the viewer, which owns ply. */
+  onSelectPly?: (ply: number) => void;
   error?: string | null;
 }
 
 export function MoveQualityPanel({
   moveQuality,
   currentPly,
+  onSelectPly,
   error = null,
 }: MoveQualityPanelProps) {
   if (error) {
@@ -43,7 +53,13 @@ export function MoveQualityPanel({
   if (moveQuality.status === "not_gradable") return <NotGradableNotice detail={moveQuality} />;
   if (moveQuality.status !== "complete") return null;
 
-  return <CompleteMoveQualityPanel moveQuality={moveQuality} currentPly={currentPly} />;
+  return (
+    <CompleteMoveQualityPanel
+      moveQuality={moveQuality}
+      currentPly={currentPly}
+      onSelectPly={onSelectPly}
+    />
+  );
 }
 
 function NotGradableNotice({ detail }: { detail: NotGradable }) {
@@ -58,11 +74,19 @@ function NotGradableNotice({ detail }: { detail: NotGradable }) {
 interface CompletePanelProps {
   moveQuality: CompleteMoveQuality;
   currentPly: number;
+  onSelectPly?: (ply: number) => void;
 }
 
-function CompleteMoveQualityPanel({ moveQuality, currentPly }: CompletePanelProps) {
+function CompleteMoveQualityPanel({
+  moveQuality,
+  currentPly,
+  onSelectPly,
+}: CompletePanelProps) {
+  const [filter, setFilter] = useState<MoveFilter>("critical");
+
   const summary = moveQuality.summary;
   const current = moveQuality.moves.find((move) => move.ply === currentPly) ?? null;
+  const shown = filterMoves(moveQuality.moves, filter);
 
   return (
     <section className="move-quality">
@@ -101,6 +125,14 @@ function CompleteMoveQualityPanel({ moveQuality, currentPly }: CompletePanelProp
 
       <CurrentMove move={current} />
 
+      <ReviewControls
+        moves={shown}
+        filter={filter}
+        onChangeFilter={setFilter}
+        currentPly={currentPly}
+        onSelectPly={onSelectPly}
+      />
+
       {/* Numerator and denominator for both samples. "40 games" must never be
           able to render as "79", and the same rule applies to moves. */}
       <p className="analysis-note">
@@ -124,6 +156,94 @@ function CompleteMoveQualityPanel({ moveQuality, currentPly }: CompletePanelProp
         strong, so a lower figure is not itself a mistake.
       </p>
     </section>
+  );
+}
+
+interface ReviewControlsProps {
+  /** Already filtered, so the list and the buttons cannot disagree. */
+  moves: MoveQuality[];
+  filter: MoveFilter;
+  onChangeFilter: (filter: MoveFilter) => void;
+  currentPly: number;
+  onSelectPly?: (ply: number) => void;
+}
+
+function ReviewControls({
+  moves,
+  filter,
+  onChangeFilter,
+  currentPly,
+  onSelectPly,
+}: ReviewControlsProps) {
+  const previous = previousMovePly(moves, currentPly);
+  const next = nextMovePly(moves, currentPly);
+
+  return (
+    <div className="move-quality-review">
+      <fieldset className="move-quality-filters">
+        <legend>Show</legend>
+        {MOVE_FILTERS.map((option) => (
+          <label key={option}>
+            <input
+              type="radio"
+              name="move-quality-filter"
+              value={option}
+              checked={filter === option}
+              onChange={() => onChangeFilter(option)}
+            />
+            {FILTER_LABEL[option]}
+          </label>
+        ))}
+      </fieldset>
+
+      <div className="move-quality-steps">
+        <button
+          type="button"
+          onClick={() => previous !== null && onSelectPly?.(previous)}
+          // Disabled at the ends rather than wrapping: silently jumping from
+          // the last mistake back to the first reads as a lost click.
+          disabled={previous === null}
+        >
+          Previous issue
+        </button>
+        <button
+          type="button"
+          onClick={() => next !== null && onSelectPly?.(next)}
+          disabled={next === null}
+        >
+          Next issue
+        </button>
+        <span className="analysis-note" role="status">
+          {moves.length === 1 ? "1 move" : `${moves.length} moves`}
+        </span>
+      </div>
+
+      {moves.length === 0 ? (
+        <p className="analysis-note">No moves match this filter.</p>
+      ) : (
+        <ol className="move-quality-issues" aria-label="Moves to review">
+          {moves.map((move) => (
+            <li key={move.ply}>
+              <button
+                type="button"
+                className={move.ply === currentPly ? "selected" : undefined}
+                onClick={() => onSelectPly?.(move.ply)}
+              >
+                <span className="move-quality-move">
+                  {`${move.side === "white" ? `${move.move_number}.` : `${move.move_number}...`} ${move.san}`}
+                </span>
+                {/* Leading comma for the same reason as the move-list
+                    annotation: accessible-name computation trims each
+                    element, so a space here would not survive the join. */}
+                <span className="move-quality-issue-verdict">
+                  {`, ${describeQuality(move)}`}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
   );
 }
 

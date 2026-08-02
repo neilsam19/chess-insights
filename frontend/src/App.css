@@ -316,6 +316,96 @@
   color: var(--tone-critical);
 }
 
+.move-quality-review {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.move-quality-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.move-quality-filters legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--text-h);
+}
+
+.move-quality-filters label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.move-quality-steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.move-quality-steps button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.move-quality-steps button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.move-quality-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.move-quality-issues button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.move-quality-issues button.selected {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+}
+
+.move-quality-issue-verdict {
+  font-size: 12px;
+}
+
 .move-quality-badge {
   font-size: 11px;
   padding: 2px 8px;

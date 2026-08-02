@@ -117,6 +117,66 @@ export function moveAnnotation(move: MoveQuality): MoveAnnotation | null {
   };
 }
 
+export const MOVE_FILTERS = ["all", "inaccuracy", "mistake", "critical"] as const;
+
+export type MoveFilter = (typeof MOVE_FILTERS)[number];
+
+export const FILTER_LABEL: Record<MoveFilter, string> = {
+  all: "All my moves",
+  inaccuracy: "Inaccuracies or worse",
+  mistake: "Mistakes or worse",
+  critical: "Critical mistakes",
+};
+
+/**
+ * Ordering for "or worse". `unscored` sits with `good` at zero: a move the
+ * server could not grade is not evidence of a weak one, so it is never
+ * presented as something to review.
+ */
+const SEVERITY: Record<MoveQualityLabel, number> = {
+  good: 0,
+  unscored: 0,
+  inaccuracy: 1,
+  mistake: 2,
+  blunder: 3,
+  critical: 3,
+};
+
+/**
+ * "Critical" is blunders *and* mate errors, deliberately matching the
+ * `critical_mistakes` figure on the summary card. The two labels are disjoint
+ * at severity 3 so nothing is double counted, and a reader who sees "4
+ * critical mistakes" finds exactly four when they filter for them.
+ */
+const FILTER_FLOOR: Record<MoveFilter, number> = {
+  all: 0,
+  inaccuracy: 1,
+  mistake: 2,
+  critical: 3,
+};
+
+export function filterMoves(moves: MoveQuality[], filter: MoveFilter): MoveQuality[] {
+  const floor = FILTER_FLOOR[filter];
+  if (floor === 0) return moves;
+  return moves.filter((move) => SEVERITY[move.quality] >= floor);
+}
+
+/**
+ * The next move in `moves` after `ply`, or null at the end.
+ *
+ * Takes an already-filtered list, so navigation and the visible list can never
+ * disagree about what counts as the next issue.
+ */
+export function nextMovePly(moves: MoveQuality[], ply: number): number | null {
+  const later = moves.filter((move) => move.ply > ply).map((move) => move.ply);
+  return later.length === 0 ? null : Math.min(...later);
+}
+
+export function previousMovePly(moves: MoveQuality[], ply: number): number | null {
+  const earlier = moves.filter((move) => move.ply < ply).map((move) => move.ply);
+  return earlier.length === 0 ? null : Math.max(...earlier);
+}
+
 /**
  * Annotations keyed by ply, for the move list.
  *

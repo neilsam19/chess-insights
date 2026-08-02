@@ -5,8 +5,11 @@ import {
   annotationsByPly,
   describePlayerScore,
   describeQuality,
+  filterMoves,
   formatPlayerScore,
   moveAnnotation,
+  nextMovePly,
+  previousMovePly,
 } from "./moveQuality";
 
 function cp(value: number): PlayerScore {
@@ -144,6 +147,75 @@ describe("moveAnnotation", () => {
 
     expect(moveAnnotation(converting)).toBeNull();
     expect(describeQuality(converting)).toBe("Forced mate sequence");
+  });
+});
+
+/** One move of each label, at ascending plies, in severity order. */
+function oneOfEach(): MoveQuality[] {
+  return [
+    move({ ply: 1, quality: "good", centipawn_loss: 10 }),
+    move({ ply: 3, quality: "unscored", special_classification: "mate_sequence" }),
+    move({ ply: 5, quality: "inaccuracy", centipawn_loss: 60 }),
+    move({ ply: 7, quality: "mistake", centipawn_loss: 140 }),
+    move({ ply: 9, quality: "blunder", centipawn_loss: 320 }),
+    move({ ply: 11, quality: "critical", special_classification: "missed_mate" }),
+  ];
+}
+
+function plies(moves: MoveQuality[]): number[] {
+  return moves.map((entry) => entry.ply);
+}
+
+describe("filterMoves", () => {
+  it("shows every player move under the widest filter", () => {
+    expect(plies(filterMoves(oneOfEach(), "all"))).toEqual([1, 3, 5, 7, 9, 11]);
+  });
+
+  it("includes everything at or below each threshold", () => {
+    expect(plies(filterMoves(oneOfEach(), "inaccuracy"))).toEqual([5, 7, 9, 11]);
+    expect(plies(filterMoves(oneOfEach(), "mistake"))).toEqual([7, 9, 11]);
+  });
+
+  it("counts blunders and mate errors together as critical", () => {
+    // Deliberately the same definition as the summary card's
+    // `critical_mistakes`. A reader told "2 critical mistakes" must find two
+    // when they filter for them.
+    expect(plies(filterMoves(oneOfEach(), "critical"))).toEqual([9, 11]);
+  });
+
+  it("never offers an ungradeable move as something to review", () => {
+    for (const filter of ["inaccuracy", "mistake", "critical"] as const) {
+      expect(plies(filterMoves(oneOfEach(), filter))).not.toContain(3);
+    }
+  });
+});
+
+describe("issue navigation", () => {
+  it("steps to the nearest move in either direction", () => {
+    const issues = filterMoves(oneOfEach(), "mistake");
+
+    expect(nextMovePly(issues, 0)).toBe(7);
+    expect(nextMovePly(issues, 7)).toBe(9);
+    expect(previousMovePly(issues, 11)).toBe(9);
+    expect(previousMovePly(issues, 8)).toBe(7);
+  });
+
+  it("stops at the ends rather than wrapping", () => {
+    const issues = filterMoves(oneOfEach(), "mistake");
+
+    expect(nextMovePly(issues, 11)).toBeNull();
+    expect(previousMovePly(issues, 7)).toBeNull();
+  });
+
+  it("has nowhere to go in an empty set", () => {
+    expect(nextMovePly([], 0)).toBeNull();
+    expect(previousMovePly([], 99)).toBeNull();
+  });
+
+  it("skips moves the active filter excludes", () => {
+    // From the start, the next *mistake* is ply 7 - not the inaccuracy at 5.
+    expect(nextMovePly(filterMoves(oneOfEach(), "mistake"), 0)).toBe(7);
+    expect(nextMovePly(filterMoves(oneOfEach(), "inaccuracy"), 0)).toBe(5);
   });
 });
 

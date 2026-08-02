@@ -21,6 +21,16 @@ vi.mock("../api/analysis", async () => {
   };
 });
 
+// The viewer now asks for move quality once analysis completes. Stubbed to a
+// state that renders nothing, so these tests stay about analysis and never
+// reach for the network.
+vi.mock("../api/moveQuality", () => ({
+  getGameMoveQuality: vi.fn(async () => ({
+    status: "not_analyzed" as const,
+    game_id: "aaaaaaaa-0000-4000-8000-000000000001",
+  })),
+}));
+
 vi.mock("react-chessboard", () => ({
   Chessboard: () => <div data-testid="board" />,
 }));

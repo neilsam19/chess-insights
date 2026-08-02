@@ -20,7 +20,7 @@ export function MoveList({
   annotations,
 }: MoveListProps) {
   return (
-    <ol className="move-list">
+    <ol className="move-list" aria-label="Moves">
       {moves.map((move) => {
         const annotation = annotations?.get(move.ply);
 

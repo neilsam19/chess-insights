@@ -170,6 +170,7 @@ export function ChessGameViewer({ game, gameId }: ChessGameViewerProps) {
         <MoveQualityPanel
           moveQuality={moveQuality}
           currentPly={currentPly}
+          onSelectPly={setCurrentPly}
           error={current?.error ?? null}
         />
       )}

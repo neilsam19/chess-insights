@@ -17,6 +17,29 @@ vi.mock("../api/library", async () => {
   };
 });
 
+// This page renders the board viewer, which asks for analysis and - once that
+// is complete - for move quality. Without these the tests reach for a real
+// server on port 8001, which is slow when it is absent and different when it
+// is present.
+vi.mock("../api/analysis", async () => {
+  const actual =
+    await vi.importActual<typeof import("../api/analysis")>("../api/analysis");
+  return {
+    ...actual,
+    getGameAnalysis: vi.fn(async (gameId: string) => ({
+      status: "not_analyzed" as const,
+      game_id: gameId,
+    })),
+  };
+});
+
+vi.mock("../api/moveQuality", () => ({
+  getGameMoveQuality: vi.fn(async (gameId: string) => ({
+    status: "not_analyzed" as const,
+    game_id: gameId,
+  })),
+}));
+
 const UPLOAD_ID = "aaaaaaaa-0000-4000-8000-000000000000";
 
 function summary(index: number, id: string, white: string, opening: string): GameSummary {
