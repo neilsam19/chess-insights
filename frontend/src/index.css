@@ -11,6 +11,13 @@
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
 
+  /* Move-quality severity. Colour is always paired with a symbol and a text
+     label, so these are reinforcement and never the only signal. */
+  --tone-inaccuracy: #b45309;
+  --tone-mistake: #c2410c;
+  --tone-blunder: #b91c1c;
+  --tone-critical: #7f1d1d;
+
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
@@ -43,6 +50,11 @@
     --social-bg: rgba(47, 48, 58, 0.5);
     --shadow:
       rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+
+    --tone-inaccuracy: #fbbf24;
+    --tone-mistake: #fb923c;
+    --tone-blunder: #f87171;
+    --tone-critical: #fca5a5;
   }
 
   #social .button-icon {

@@ -20,12 +20,21 @@ interface GameAnalysisPanelProps {
   gameId: string;
   currentPly: number;
   onSelectPly?: (ply: number) => void;
+  /**
+   * Fired whenever the analysis state changes. This panel is the only thing
+   * that polls, so anything downstream of "analysis finished" - move quality,
+   * for one - learns about it here rather than by polling a second time.
+   *
+   * Must be referentially stable, or the effect below re-fires every render.
+   */
+  onStatusChange?: (status: GameAnalysis["status"] | null) => void;
 }
 
 export function GameAnalysisPanel({
   gameId,
   currentPly,
   onSelectPly,
+  onStatusChange,
 }: GameAnalysisPanelProps) {
   const [analysis, setAnalysis] = useState<GameAnalysis | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,6 +47,11 @@ export function GameAnalysisPanel({
   const backoffRef = useRef(POLL_INTERVAL_MS);
 
   const active = isActive(analysis);
+  const status = analysis?.status ?? null;
+
+  useEffect(() => {
+    onStatusChange?.(status);
+  }, [status, onStatusChange]);
 
   // The panel is keyed by gameId where it is mounted, so selecting a
   // different game remounts it with fresh state. That is why this effect
