@@ -189,6 +189,30 @@ from ACPL, from critical counts, and from the mistake totals.
 blunders in the critical-mistakes total while keeping their specific type, and
 they always carry `centipawn_loss = null`.
 
+**Amendment (CP1): the quality enum gains `critical`.**
+
+The plan's five-value enum — `good | inaccuracy | mistake | blunder |
+unscored` — cannot express a mate error without breaking something else. Label
+it `blunder` and `critical_mistakes = blunders + missed + allowed` counts it
+twice. Label it `unscored` and a mate error becomes an *ungraded* move, which
+drops it out of coverage (D14) and lets a game full of mate errors report high
+coverage and no mistakes.
+
+So a mate error takes `quality = critical`, distinct from both:
+
+```text
+quality: good | inaccuracy | mistake | blunder | critical | unscored
+```
+
+- `blunder` keeps its exact definition: centipawn loss ≥ 200. Nothing else.
+- `critical` means a mate error; `special_classification` says which.
+- `critical_mistakes = blunders + missed_mates + allowed_mates`, with no
+  double counting, because the two labels are disjoint.
+- Mate errors stay **graded**, so they count toward coverage.
+
+`mate_sequence` is unaffected: it remains `unscored`, since it genuinely cannot
+be graded.
+
 ### D5 — Fixed, server-owned thresholds
 
 ```text
@@ -318,6 +342,7 @@ guessed. The UI may group these as "not scored"; the tests distinguish them.
 |---|---|
 | `missing_before_evaluation` | no evaluation at ply `k-1` |
 | `missing_after_evaluation` | no evaluation at ply `k` |
+| `non_contiguous_evaluations` | evaluations were supplied for the wrong plies *(added in CP1)* |
 | `mate_sequence` | both sides of the comparison are mate in the same direction (D4 diagonal) |
 | `ambiguous_mate` | a `mate 0` whose direction cannot be resolved, e.g. at ply 0 |
 | `missing_move_data` | the stored move or its UCI is unavailable |
@@ -338,7 +363,7 @@ MoveQualityOut
   best_move_uci, is_exact_best_move: bool | null
   score_before: ScoreOut, score_after: ScoreOut     # existing score union
   centipawn_loss: int | null
-  quality: good | inaccuracy | mistake | blunder | unscored
+  quality: good | inaccuracy | mistake | blunder | critical | unscored
   special_classification: missed_mate | allowed_mate | mate_sequence | null
   unscored_reason: string | null
 ```
