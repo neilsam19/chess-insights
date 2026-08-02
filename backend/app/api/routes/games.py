@@ -7,10 +7,12 @@ from app.core.database import get_db
 from app.models.game import Game
 from app.schemas.analysis import GameAnalysisOut
 from app.schemas.library import GameDetailOut
+from app.schemas.move_quality import GameMoveQualityResponse
 from app.services import analysis_enqueue
 from app.services.analysis_executor import InvalidGameDataError
 from app.services.analysis_view import game_analysis_state
 from app.services.engine import EngineUnavailableError
+from app.services.move_quality_view import game_move_quality
 from app.repositories import games as game_repo
 
 router = APIRouter()
@@ -39,6 +41,27 @@ def get_game_analysis(game_id: uuid.UUID, db: Session = Depends(get_db)) -> Game
     so a client can poll this single endpoint from request to result.
     """
     return game_analysis_state(db, _game_or_404(db, game_id))
+
+
+@router.get("/games/{game_id}/move-quality", response_model=GameMoveQualityResponse)
+def get_game_move_quality(
+    game_id: uuid.UUID, db: Session = Depends(get_db)
+) -> GameMoveQualityResponse:
+    """How well the saved player played, derived from stored evaluations.
+
+    Read-only and separate from `/analysis` on purpose: that endpoint is polled
+    every second and a half while a job runs, and deriving move quality on each
+    poll would compute the same answer repeatedly for data that cannot change
+    until the job finishes.
+
+    Nothing is stored, no job is queued, and no engine is started. Only games
+    with a completed run carry results; every other state is reported with the
+    same shape the analysis endpoint uses.
+    """
+    game = game_repo.get_game_with_moves(db, game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="Game not found.")
+    return game_move_quality(db, game)
 
 
 @router.post("/games/{game_id}/analysis", response_model=GameAnalysisOut, status_code=202)
