@@ -377,11 +377,20 @@ GameMoveQualityOut  (status = "complete")
   coverage_percent
   average_centipawn_loss: int | null
   median_centipawn_loss: int | null
-  exact_best_move_count, exact_best_move_rate
+  exact_best_move_count, exact_best_move_comparable, exact_best_move_percent
   inaccuracies, mistakes, blunders
-  missed_mates, allowed_mates, critical_mistakes
+  missed_mates, allowed_mates, mate_sequences, critical_mistakes
   moves: MoveQualityOut[]
 ```
+
+**Amendment (CP2):** the field is `exact_best_move_percent`, an integer 0–100,
+not `exact_best_move_rate`. A field named "rate" holding `63` invites a client
+to render "6300%". `exact_best_move_comparable` is its denominator — the moves
+that had a stored best move at all — which is not the move count.
+
+Percentages and averages round **half away from zero**, not with Python's
+half-to-even default, so `2.5` and `10.5` do not round in opposite directions
+in the same table.
 
 Tagged union for the endpoint:
 

@@ -393,6 +393,112 @@ def derive_move_quality(
     ]
 
 
+@dataclass(frozen=True)
+class GameMoveQualitySummary:
+    """Aggregate facts about one player's moves in one game.
+
+    Three counts describe coverage rather than one, because a move can be
+    graded without having a numeric centipawn loss - every off-diagonal mate
+    transition does exactly that. Conflating them would either hide mate errors
+    from coverage or drag them into an average they have no number for.
+    """
+
+    total_player_moves: int
+    # Quality is anything other than `unscored` - includes mate errors.
+    graded_moves: int
+    # Has an integer centipawn loss. The ACPL and median sample, and reported
+    # alongside them so a client can see how thin that sample is.
+    numeric_cpl_moves: int
+    unscored_moves: int
+    coverage_percent: int
+
+    # None, never 0, when there is nothing to average: "ACPL 0" reads as
+    # perfect play, which is the opposite of "we could not measure this".
+    average_centipawn_loss: int | None
+    median_centipawn_loss: int | None
+
+    exact_best_move_count: int
+    # Moves that had a stored best move to compare against - the rate's
+    # denominator, which is not the same as the move count.
+    exact_best_move_comparable: int
+    exact_best_move_percent: int | None
+
+    inaccuracies: int
+    mistakes: int
+    blunders: int
+    missed_mates: int
+    allowed_mates: int
+    mate_sequences: int
+    # Blunders plus mate errors. Disjoint labels, so nothing is counted twice.
+    critical_mistakes: int
+
+
+def _percent(numerator: int, denominator: int) -> int:
+    """Rounded half away from zero, so a displayed percentage never surprises.
+
+    Python's built-in round() is half-to-even, which would make 12.5 and 13.5
+    round in different directions - defensible for statistics, confusing in a
+    UI that shows both.
+    """
+    return int(100 * numerator / denominator + 0.5)
+
+
+def _mean(values: list[int]) -> int:
+    return int(sum(values) / len(values) + 0.5)
+
+
+def _median(values: list[int]) -> int:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[middle]
+    return int((ordered[middle - 1] + ordered[middle]) / 2 + 0.5)
+
+
+def summarize_moves(facts: Sequence[MoveQuality]) -> GameMoveQualitySummary:
+    """Aggregate per-move facts. Pure, and safe on an empty sequence.
+
+    Mate events never enter the centipawn average - there is no honest number
+    for them - but they do count as graded and as critical mistakes. A player
+    who missed three forced mates has not played a clean game, and an ACPL that
+    ignored them while a coverage figure also ignored them would say otherwise.
+    """
+    total = len(facts)
+    losses = [fact.centipawn_loss for fact in facts if fact.centipawn_loss is not None]
+    graded = sum(1 for fact in facts if fact.is_graded)
+
+    comparable = [fact for fact in facts if fact.is_exact_best_move is not None]
+    exact = sum(1 for fact in comparable if fact.is_exact_best_move)
+
+    def count(**criteria: str) -> int:
+        field, expected = next(iter(criteria.items()))
+        return sum(1 for fact in facts if getattr(fact, field) == expected)
+
+    blunders = count(quality=BLUNDER)
+    missed_mates = count(special_classification=MISSED_MATE)
+    allowed_mates = count(special_classification=ALLOWED_MATE)
+
+    return GameMoveQualitySummary(
+        total_player_moves=total,
+        graded_moves=graded,
+        numeric_cpl_moves=len(losses),
+        unscored_moves=total - graded,
+        coverage_percent=_percent(graded, total) if total else 0,
+        average_centipawn_loss=_mean(losses) if losses else None,
+        median_centipawn_loss=_median(losses) if losses else None,
+        exact_best_move_count=exact,
+        exact_best_move_comparable=len(comparable),
+        exact_best_move_percent=_percent(exact, len(comparable)) if comparable else None,
+        inaccuracies=count(quality=INACCURACY),
+        mistakes=count(quality=MISTAKE),
+        blunders=blunders,
+        missed_mates=missed_mates,
+        allowed_mates=allowed_mates,
+        mate_sequences=count(special_classification=MATE_SEQUENCE),
+        critical_mistakes=blunders + missed_mates + allowed_mates,
+    )
+
+
 __all__ = [
     "ALLOWED_MATE",
     "AMBIGUOUS_MATE",
@@ -403,6 +509,7 @@ __all__ = [
     "CRITICAL",
     "GOOD",
     "GRADABLE_COLORS",
+    "GameMoveQualitySummary",
     "INACCURACY",
     "INACCURACY_THRESHOLD",
     "MATE_AGAINST",
@@ -429,4 +536,5 @@ __all__ = [
     "normalize_uci",
     "quality_for_loss",
     "side_for_ply",
+    "summarize_moves",
 ]
