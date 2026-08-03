@@ -22,7 +22,7 @@ The state machine these functions implement is documented in
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -206,6 +206,27 @@ def latest_job_for_game(db: Session, game_id: uuid.UUID) -> AnalysisJob | None:
         .limit(1)
     )
     return db.execute(stmt).scalars().first()
+
+
+def list_jobs_for_games(db: Session, game_ids: Sequence[uuid.UUID]) -> list[AnalysisJob]:
+    """Every job for a set of games, one query.
+
+    Ordered newest-first within each game, matching
+    `find_active_job_for_game` and `latest_job_for_game`, so picking the first
+    match per game gives the same answer those two would.
+    """
+    if not game_ids:
+        return []
+    stmt = (
+        select(AnalysisJob)
+        .where(AnalysisJob.game_id.in_(game_ids))
+        .order_by(
+            AnalysisJob.game_id,
+            AnalysisJob.created_at.desc(),
+            AnalysisJob.id.desc(),
+        )
+    )
+    return list(db.execute(stmt).scalars())
 
 
 def list_jobs_for_batch(db: Session, batch_id: uuid.UUID) -> list[AnalysisJob]:
@@ -636,6 +657,7 @@ __all__ = [
     "heartbeat_job",
     "latest_run_for_job",
     "list_jobs_for_batch",
+    "list_jobs_for_games",
     "mark_job_cancelled",
     "requeue_job",
     "retry_job",

@@ -33,3 +33,19 @@ def list_all_games(db: Session, upload_id: uuid.UUID) -> list[Game]:
     """All games for an upload, unpaginated - used to compute aggregate stats."""
     stmt = select(Game).where(Game.upload_id == upload_id).order_by(Game.game_index)
     return list(db.execute(stmt).scalars())
+
+
+def list_all_games_with_moves(db: Session, upload_id: uuid.UUID) -> list[Game]:
+    """As `list_all_games`, plus every game's moves in one extra query.
+
+    `selectinload` rather than lazy access: move-quality aggregation reads the
+    moves of every game in the upload, and letting the relationship load per
+    game would turn one request into one query per game.
+    """
+    stmt = (
+        select(Game)
+        .where(Game.upload_id == upload_id)
+        .order_by(Game.game_index)
+        .options(selectinload(Game.moves))
+    )
+    return list(db.execute(stmt).scalars())

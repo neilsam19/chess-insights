@@ -425,6 +425,45 @@ Aggregation uses bounded queries — games with their complete run, moves for
 those games, evaluations for those runs — then aggregates in Python, matching
 the existing `library_stats` pattern. No query per game and none per move.
 
+**Amendment (CP6):** four changes, all made while implementing this shape.
+
+*`overall`, `by_color[].metrics` and `by_opening[].metrics` are one type,
+`MoveQualityMetricsOut`, which is `MoveQualitySummaryOut` plus a `games`
+count.* An upload's average centipawn loss and a game's must mean the same
+thing and be computed by the same arithmetic. Two parallel field lists would
+eventually disagree about what `graded_moves` counts, and the disagreement
+would be invisible — both numbers would look plausible.
+
+*`exact_best_move_rate` is `exact_best_move_percent`, for the reason recorded
+in the CP2 amendment above, and `critical_mistakes_per_game` is not a field.*
+A pre-divided float hides its denominator and rounds badly. The response
+carries the `critical_mistakes` total and `coverage.complete_games`, which is
+the denominator, so a client can render either and the numbers behind the
+figure stay visible — D11 again.
+
+*An opening bucket's `opening` is `null` when the game has no classification,
+not the string `"Unknown"`.* `statistics.opening_label` uses that sentinel,
+which is fine for a display label and wrong for a bucket key: it is
+indistinguishable from an opening actually named that. The unclassified bucket
+sorts last.
+
+*A colour or opening with no completed games is absent, not present with
+zeroes.* Zero blunders as Black reads as a finding, not as the absence of
+Black games.
+
+`recommendations[]` is not part of this checkpoint. It arrives in CP7, where
+its rules and its evidence contract are decided; adding an empty list first
+would invite a client to render an empty "nothing to work on" panel that means
+the opposite of what it says.
+
+**Coverage buckets follow `game_analysis_state`'s precedence exactly**, with
+the colour check first as `game_move_quality` has it. They are mutually
+exclusive and sum to `total_games`. This is D10 applied to aggregation: the
+dashboard must not become a second opinion about which analysis is current,
+or it will eventually say "40 analysed" beside a game page offering to analyse
+one of them. A game being re-analysed therefore counts as running, not
+complete — the same answer its own endpoint gives.
+
 ---
 
 ## 7. Recommendations

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -96,6 +96,43 @@ def list_position_evaluations_for_run(
     return list(db.execute(stmt).scalars())
 
 
+def list_runs_for_games(db: Session, game_ids: Sequence[uuid.UUID]) -> list[AnalysisRun]:
+    """Every run for a set of games, one query.
+
+    Ordered newest-first *within* each game, using the same keys as
+    `get_latest_analysis_run_for_game` and `get_latest_complete_run_for_game`,
+    so a caller can pick the first match per game and get exactly what those
+    two would have returned. That equivalence is the point: aggregation must
+    not become a second definition of "the current run".
+    """
+    if not game_ids:
+        return []
+    stmt = (
+        select(AnalysisRun)
+        .where(AnalysisRun.game_id.in_(game_ids))
+        .order_by(
+            AnalysisRun.game_id,
+            AnalysisRun.created_at.desc(),
+            AnalysisRun.id.desc(),
+        )
+    )
+    return list(db.execute(stmt).scalars())
+
+
+def list_position_evaluations_for_runs(
+    db: Session, run_ids: Sequence[uuid.UUID]
+) -> list[PositionEvaluation]:
+    """Evaluations for many runs in one query, ordered by run then ply."""
+    if not run_ids:
+        return []
+    stmt = (
+        select(PositionEvaluation)
+        .where(PositionEvaluation.analysis_run_id.in_(run_ids))
+        .order_by(PositionEvaluation.analysis_run_id, PositionEvaluation.ply)
+    )
+    return list(db.execute(stmt).scalars())
+
+
 def save_position_evaluations(
     db: Session,
     *,
@@ -169,6 +206,8 @@ __all__ = [
     "get_latest_analysis_run_for_game",
     "get_run_with_evaluations",
     "list_position_evaluations_for_run",
+    "list_position_evaluations_for_runs",
+    "list_runs_for_games",
     "mark_analysis_run_complete",
     "mark_analysis_run_failed",
     "save_position_evaluations",

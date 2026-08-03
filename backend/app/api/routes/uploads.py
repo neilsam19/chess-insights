@@ -24,6 +24,8 @@ from app.schemas.upload import (
     UploadPreviewResponse,
     UploadStatsOut,
 )
+from app.schemas.upload_move_quality import UploadMoveQualityOut
+from app.services.upload_move_quality import upload_move_quality
 from app.services.import_service import (
     DuplicateUploadError,
     InvalidEncodingError,
@@ -276,6 +278,24 @@ def get_upload_stats(upload_id: uuid.UUID, db: Session = Depends(get_db)) -> Upl
             for opening in stats.openings
         ],
     )
+
+
+@router.get("/uploads/{upload_id}/move-quality", response_model=UploadMoveQualityOut)
+def get_upload_move_quality(
+    upload_id: uuid.UUID, db: Session = Depends(get_db)
+) -> UploadMoveQualityOut:
+    """How well the saved player played across a whole upload.
+
+    Read-only and derived on read: no job is queued, no row is written, and no
+    engine is started. Only completed, gradable games contribute to the
+    figures; every other game is counted in its own coverage bucket, so the
+    denominator behind each number is always visible.
+    """
+    upload = upload_repo.get_upload(db, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found.")
+
+    return upload_move_quality(db, upload)
 
 
 @router.get("/uploads/{upload_id}/games", response_model=PaginatedGameSummariesOut)

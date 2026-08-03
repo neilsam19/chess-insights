@@ -499,6 +499,34 @@ def summarize_moves(facts: Sequence[MoveQuality]) -> GameMoveQualitySummary:
     )
 
 
+# Mistake and worse. Inaccuracies are excluded deliberately: a list meant to
+# answer "what should I look at first" stops being useful once it contains
+# every slightly imprecise move.
+REVIEWABLE_QUALITIES = frozenset({MISTAKE, BLUNDER, CRITICAL})
+
+
+def is_reviewable(fact: MoveQuality) -> bool:
+    return fact.quality in REVIEWABLE_QUALITIES
+
+
+def review_severity_key(fact: MoveQuality) -> tuple[int, int]:
+    """Sort key for "worst first". Lower sorts earlier.
+
+    Mate errors come before every centipawn loss rather than being given a
+    notional pawn value. Throwing away a forced mate, or walking into one, is a
+    different kind of event from losing material, and the whole module exists
+    to avoid pricing mate in pawns.
+
+    This is a *partial* order - two mate errors tie, as do two equal losses.
+    Callers must append their own stable tiebreak, or the list will reorder
+    between requests for no reason the reader can see.
+    """
+    return (
+        0 if fact.special_classification is not None else 1,
+        -(fact.centipawn_loss or 0),
+    )
+
+
 __all__ = [
     "ALLOWED_MATE",
     "AMBIGUOUS_MATE",
@@ -526,15 +554,18 @@ __all__ = [
     "NON_CONTIGUOUS_EVALUATIONS",
     "PlayedMove",
     "PlayerScore",
+    "REVIEWABLE_QUALITIES",
     "StoredScore",
     "UNSCORED",
     "WHITE",
     "classify_move",
     "derive_move_quality",
+    "is_reviewable",
     "move_number_for_ply",
     "normalize_score",
     "normalize_uci",
     "quality_for_loss",
+    "review_severity_key",
     "side_for_ply",
     "summarize_moves",
 ]
