@@ -699,6 +699,88 @@ class TestReadOnlyAndBounded:
         assert large_count <= 8
 
 
+# --- recommendations, over real stored rows --------------------------------
+
+
+class TestRecommendations:
+    """The rules themselves are covered in test_training_recommendations.py.
+
+    What is checked here is the join: that the endpoint reaches them with real
+    aggregates, and that every position they point at is one of this upload's.
+    """
+
+    def test_a_thin_library_gets_only_what_it_supports(
+        self, analysis_client, analyzed_upload
+    ):
+        """Three games is not enough to conclude anything about colours or
+        openings, and the rules decline rather than guess."""
+        recommendations = _quality(analysis_client, analyzed_upload)["recommendations"]
+
+        assert [r["type"] for r in recommendations] == ["review_mistakes"]
+
+    def test_an_unanalysed_library_gets_nothing_at_all(self, analysis_client):
+        upload_id = _upload(analysis_client)
+
+        assert _quality(analysis_client, upload_id)["recommendations"] == []
+
+    def test_every_evidence_item_belongs_to_this_upload(
+        self, analysis_client, analyzed_upload, db_session
+    ):
+        """The one containment guarantee that matters.
+
+        A recommendation deep-links to a game and a ply. Pointing at a game
+        from a different upload would send the reader somewhere they never
+        asked about, and would leak that the other upload exists.
+        """
+        body = _quality(analysis_client, analyzed_upload)
+        owned = {
+            str(game_id)
+            for game_id in db_session.execute(
+                select(Game.id).where(Game.upload_id == analyzed_upload)
+            ).scalars()
+        }
+
+        seen = 0
+        for recommendation in body["recommendations"]:
+            for item in recommendation["evidence_items"]:
+                assert item["game_id"] in owned
+                seen += 1
+
+        assert seen > 0
+
+    def test_evidence_matches_the_standalone_review_list(
+        self, analysis_client, analyzed_upload
+    ):
+        """Same facts, same ranking. Two orderings would be two answers."""
+        body = _quality(analysis_client, analyzed_upload)
+        review = next(
+            r for r in body["recommendations"] if r["type"] == "review_mistakes"
+        )
+
+        assert review["evidence_items"] == body["top_review_moves"][: len(review["evidence_items"])]
+
+    def test_every_recommendation_declares_its_sample(
+        self, analysis_client, work, engine_holder, db_session
+    ):
+        upload_id = _upload(analysis_client)
+        _analyze(
+            analysis_client, work, engine_holder, _game(db_session, upload_id, 0), GAME_0_EVALUATIONS
+        )
+
+        for recommendation in _quality(analysis_client, upload_id)["recommendations"]:
+            assert "1 of 3 games" in recommendation["coverage_note"]
+
+    def test_carries_the_scores_a_reader_needs_to_judge_the_claim(
+        self, analysis_client, analyzed_upload
+    ):
+        body = _quality(analysis_client, analyzed_upload)
+        item = body["recommendations"][0]["evidence_items"][0]
+
+        assert item["score_before"] is not None
+        assert item["score_after"] is not None
+        assert item["game_id"] and item["ply"] and item["san"]
+
+
 # --- the endpoint itself ---------------------------------------------------
 
 

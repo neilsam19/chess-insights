@@ -44,6 +44,7 @@ from app.models.upload import Upload
 from app.repositories import analysis as analysis_repo
 from app.repositories import analysis_jobs as jobs_repo
 from app.repositories import games as game_repo
+from app.schemas.move_quality import PlayerScoreOut
 from app.schemas.upload_move_quality import (
     ColorMoveQualityOut,
     MoveQualityMetricsOut,
@@ -52,12 +53,14 @@ from app.schemas.upload_move_quality import (
     UploadCoverageOut,
     UploadMoveQualityOut,
 )
+from app.services.training_recommendations import build_recommendations
 from app.services.move_quality import (
     BLACK,
     GRADABLE_COLORS,
     MOVE_QUALITY_VERSION,
     WHITE,
     MoveQuality,
+    PlayerScore,
     StoredScore,
     derive_move_quality,
     is_reviewable,
@@ -210,7 +213,19 @@ def _by_opening(entries: list[GradedGame]) -> list[OpeningMoveQualityOut]:
     return buckets
 
 
-def _review_moves(entries: list[GradedGame]) -> list[ReviewMoveOut]:
+def _player_score_out(score: PlayerScore | None) -> PlayerScoreOut | None:
+    if score is None:
+        return None
+    return PlayerScoreOut(kind=score.kind, cp=score.cp, mate_distance=score.mate_distance)
+
+
+def _ranked_review_moves(entries: list[GradedGame]) -> list[ReviewMoveOut]:
+    """Every move worth reviewing, worst first.
+
+    Returned in full rather than truncated: the response shows the first ten,
+    but a recommendation scoped to one opening or one colour needs to pick its
+    own best positions out of the whole list.
+    """
     candidates: list[tuple[GradedGame, MoveQuality]] = [
         (entry, fact)
         for entry in entries
@@ -240,11 +255,13 @@ def _review_moves(entries: list[GradedGame]) -> list[ReviewMoveOut]:
             opening=_opening_label(entry.game),
             eco=entry.game.eco,
             best_move_uci=fact.best_move_uci,
+            score_before=_player_score_out(fact.score_before),
+            score_after=_player_score_out(fact.score_after),
             centipawn_loss=fact.centipawn_loss,
             quality=fact.quality,
             special_classification=fact.special_classification,
         )
-        for entry, fact in candidates[:TOP_REVIEW_MOVE_LIMIT]
+        for entry, fact in candidates
     ]
 
 
@@ -301,26 +318,38 @@ def upload_move_quality(db: Session, upload: Upload) -> UploadMoveQualityOut:
     ]
 
     overall = _metrics(entries)
+    by_color = _by_color(entries)
+    by_opening = _by_opening(entries)
+    ranked_review_moves = _ranked_review_moves(entries)
+
+    coverage = UploadCoverageOut(
+        total_games=len(games),
+        complete_games=counts[COMPLETE],
+        queued_games=counts[QUEUED],
+        running_games=counts[RUNNING],
+        failed_games=counts[FAILED],
+        cancelled_games=counts[CANCELLED],
+        not_analyzed_games=counts[NOT_ANALYZED],
+        not_gradable_games=counts[NOT_GRADABLE],
+        graded_player_moves=overall.graded_moves,
+        numeric_cpl_moves=overall.numeric_cpl_moves,
+    )
 
     return UploadMoveQualityOut(
         upload_id=upload.id,
         move_quality_version=MOVE_QUALITY_VERSION,
-        coverage=UploadCoverageOut(
-            total_games=len(games),
-            complete_games=counts[COMPLETE],
-            queued_games=counts[QUEUED],
-            running_games=counts[RUNNING],
-            failed_games=counts[FAILED],
-            cancelled_games=counts[CANCELLED],
-            not_analyzed_games=counts[NOT_ANALYZED],
-            not_gradable_games=counts[NOT_GRADABLE],
-            graded_player_moves=overall.graded_moves,
-            numeric_cpl_moves=overall.numeric_cpl_moves,
-        ),
+        coverage=coverage,
         overall=overall,
-        by_color=_by_color(entries),
-        by_opening=_by_opening(entries),
-        top_review_moves=_review_moves(entries),
+        by_color=by_color,
+        by_opening=by_opening,
+        top_review_moves=ranked_review_moves[:TOP_REVIEW_MOVE_LIMIT],
+        recommendations=build_recommendations(
+            coverage=coverage,
+            overall=overall,
+            by_color=by_color,
+            by_opening=by_opening,
+            review_moves=ranked_review_moves,
+        ),
     )
 
 

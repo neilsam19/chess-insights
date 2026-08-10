@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.schemas.move_quality import MoveQualitySummaryOut
+from app.schemas.move_quality import MoveQualitySummaryOut, PlayerScoreOut
 
 
 class MoveQualityMetricsOut(MoveQualitySummaryOut):
@@ -72,9 +72,40 @@ class ReviewMoveOut(BaseModel):
     opening: str | None
     eco: str | None
     best_move_uci: str | None
+    # What the player's position was worth before and after. Carried because a
+    # mistake made from a winning position is a different problem from one made
+    # while already losing, and only the score can tell them apart.
+    score_before: PlayerScoreOut | None
+    score_after: PlayerScoreOut | None
     centipawn_loss: int | None
     quality: Literal["mistake", "blunder", "critical"]
     special_classification: Literal["missed_mate", "allowed_mate"] | None
+
+
+class TrainingRecommendationOut(BaseModel):
+    """One thing to work on, derived from stored facts and nothing else.
+
+    There is no model behind this and no generated prose: every field is
+    assembled from counts this response already reports, and every claim is
+    backed by `evidence_items` the reader can open. `coverage_note` states the
+    sample the recommendation rests on, so a conclusion drawn from four games
+    cannot be mistaken for one drawn from forty.
+    """
+
+    type: Literal[
+        "review_mistakes",
+        "conversion_practice",
+        "opening_priority",
+        "color_priority",
+    ]
+    # 1 is the most important. Assigned after filtering, so the numbers are
+    # always 1..n with no gaps where a rule declined to fire.
+    priority: int
+    title: str
+    explanation: str
+    evidence_summary: str
+    evidence_items: list[ReviewMoveOut]
+    coverage_note: str
 
 
 class UploadMoveQualityOut(BaseModel):
@@ -88,3 +119,6 @@ class UploadMoveQualityOut(BaseModel):
     by_color: list[ColorMoveQualityOut]
     by_opening: list[OpeningMoveQualityOut]
     top_review_moves: list[ReviewMoveOut]
+    # Empty when the evidence does not support anything. Filling the space with
+    # generic advice would be the one thing this sprint set out not to do.
+    recommendations: list[TrainingRecommendationOut]

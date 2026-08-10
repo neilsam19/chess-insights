@@ -501,6 +501,34 @@ this sprint.
 an explicit coverage note. Space is never filled with generic advice
 disconnected from stored data.
 
+**Amendment (CP7):** three changes, all forced by running the rules over the
+real library.
+
+*The fourth type is `conversion_practice`, not a "tactical-review proxy".* It
+fires when at least 60% of the player's costly moves were made from positions
+the engine already rated at +1.00 or better for them, over a sample of at least
+five. That is a fact the stored data supports — the score before the move is
+right there — and it is genuinely different information from "here are your
+worst moves". A rule that merely reworded the mistake list would have been a
+fourth type in name only.
+
+*Clearing an evidence floor is not the same as having something to say.* The
+opening rule originally selected the weakest bucket that met the floors, and on
+the real library that produced "spend your next session on the Accelerated
+Dragon" from two games at an average loss of 24 against a library average of 20
+— four centipawns of noise dressed up as a plan. Both the opening and the
+colour rule now share one gate: the gap must be **at least 5 centipawns and at
+least 20% of the baseline**. Either floor alone misleads, since 5 centipawns on
+a base of 20 is a real difference and 5 on a base of 100 is not. With this in
+place the current library produces no opening or colour recommendation at all,
+which is what F6 predicted and is the correct answer.
+
+*An aggregate recommendation may legitimately carry zero evidence items.* A
+high average with no single move crossing the mistake threshold is a real and
+different finding — many small losses rather than a few large ones — so the
+wording branches on whether there are positions to point at. A recommendation
+must never promise "the positions below" and then show none.
+
 **Wording.** The system does not classify chess motifs, so recommendations must
 not invent them. "Review these high-impact positions" is permitted. "You are
 weak at forks", "you miss pins", "your endgames are poor" are not. This is
