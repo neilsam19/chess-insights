@@ -26,10 +26,22 @@ interface ChessGameViewerProps {
    * entirely stateless.
    */
   gameId?: string;
+  /**
+   * Ply to open at, for a deep link. Read once, on mount: the viewer owns ply
+   * from then on, so internal navigation is never fought by a stale prop.
+   * Callers that need to jump again should remount with a new key.
+   */
+  initialPly?: number;
 }
 
-export function ChessGameViewer({ game, gameId }: ChessGameViewerProps) {
-  const [currentPly, setCurrentPly] = useState(0);
+export function ChessGameViewer({
+  game,
+  gameId,
+  initialPly = 0,
+}: ChessGameViewerProps) {
+  const [currentPly, setCurrentPly] = useState(() =>
+    Math.max(0, Math.min(initialPly, game.moves.length)),
+  );
   const [orientation, setOrientation] = useState<"white" | "black">(
     game.player_color === "black" ? "black" : "white",
   );

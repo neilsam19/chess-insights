@@ -1,20 +1,35 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { DashboardSummary } from "../components/DashboardSummary";
 import { GameList } from "../components/GameList";
 import { ChessGameViewer } from "../components/ChessGameViewer";
+import { TrainingInsights } from "../components/TrainingInsights";
 import { UploadAnalysisPanel } from "../components/UploadAnalysisPanel";
 import { LibraryError, getGame, getUpload, getUploadGames, getUploadStats } from "../api/library";
+import { getUploadMoveQuality } from "../api/uploadMoveQuality";
 import { gameFromDetail, gameFromSummary } from "../utils/libraryAdapters";
 import type { GameSummary, SavedUpload } from "../types/library";
 import type { Game, UploadStats } from "../types/upload";
+import type { UploadMoveQuality } from "../types/uploadMoveQuality";
 
 type Status = "loading" | "not-found" | "error" | "ready";
 
 const PAGE_SIZE = 25;
 
+/**
+ * Deep-link parameters. Held in the URL rather than in component state so a
+ * recommendation can be shared, bookmarked, and survive a reload - and so
+ * resolving one never depends on which page of games happens to be loaded.
+ */
+const GAME_PARAM = "game";
+const PLY_PARAM = "ply";
+
 export function SavedDashboardPage() {
   const { uploadId } = useParams<{ uploadId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const linkedGameId = searchParams.get(GAME_PARAM);
+  const linkedPly = Number.parseInt(searchParams.get(PLY_PARAM) ?? "", 10);
 
   const [status, setStatus] = useState<Status>("loading");
   const [upload, setUpload] = useState<SavedUpload | null>(null);
@@ -27,6 +42,14 @@ export function SavedDashboardPage() {
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [isLoadingGame, setIsLoadingGame] = useState(false);
   const [gameError, setGameError] = useState<string | null>(null);
+
+  const [defaultGameId, setDefaultGameId] = useState<string | null>(null);
+
+  const [insights, setInsights] = useState<UploadMoveQuality | null>(null);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+  // Bumped when a batch finishes, so the figures follow newly analysed games
+  // instead of sitting at whatever was true when the page opened.
+  const [insightsRefresh, setInsightsRefresh] = useState(0);
 
   useEffect(() => {
     if (!uploadId) return;
@@ -48,11 +71,10 @@ export function SavedDashboardPage() {
         setGameSummaries(gamesData.items);
         setTotalGames(gamesData.total);
         setPage(1);
+        // Which game opens is decided by the effect below, from the URL and
+        // this default. Selecting one here as well would race it.
+        setDefaultGameId(gamesData.items[0]?.id ?? null);
         setStatus("ready");
-
-        if (gamesData.items.length > 0) {
-          await loadGameDetail(gamesData.items[0]);
-        }
       } catch (err) {
         if (cancelled) return;
         setStatus(err instanceof LibraryError && err.status === 404 ? "not-found" : "error");
@@ -66,20 +88,84 @@ export function SavedDashboardPage() {
     };
   }, [uploadId]);
 
-  async function loadGameDetail(summary: GameSummary) {
-    setSelectedGameIndex(summary.game_index);
-    setIsLoadingGame(true);
-    setGameError(null);
-    try {
-      const detail = await getGame(summary.id);
-      setSelectedGame(gameFromDetail(detail));
-    } catch {
-      setGameError("Could not load this game.");
-      setSelectedGame(null);
-    } finally {
-      setIsLoadingGame(false);
+  /**
+   * Loads whichever game the URL names, falling back to the upload's first.
+   *
+   * Fetched by id rather than looked up in `gameSummaries`, which holds one
+   * page of 25: a link to a game on page three would otherwise resolve to
+   * nothing at all.
+   */
+  useEffect(() => {
+    const gameId = linkedGameId ?? defaultGameId;
+    if (!gameId) return;
+
+    let cancelled = false;
+
+    async function open() {
+      setIsLoadingGame(true);
+      setGameError(null);
+      try {
+        const detail = await getGame(gameId as string);
+        if (cancelled) return;
+        setSelectedGame(gameFromDetail(detail));
+        setSelectedGameIndex(detail.game_index);
+      } catch {
+        if (cancelled) return;
+        setGameError("Could not load this game.");
+        setSelectedGame(null);
+      } finally {
+        if (!cancelled) setIsLoadingGame(false);
+      }
     }
-  }
+
+    void open();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [linkedGameId, defaultGameId]);
+
+  useEffect(() => {
+    if (!uploadId || status !== "ready") return;
+    let cancelled = false;
+
+    async function load() {
+      try {
+        const result = await getUploadMoveQuality(uploadId as string);
+        if (!cancelled) {
+          setInsights(result);
+          setInsightsError(null);
+        }
+      } catch {
+        // Distinct from "nothing analysed yet", which is a property of the
+        // library rather than of this request.
+        if (!cancelled) setInsightsError("Could not load your training insights.");
+      }
+    }
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uploadId, status, insightsRefresh]);
+
+  /** Opens a position, through the URL, so the view can be shared or reloaded. */
+  const openPosition = useCallback(
+    (gameId: string, ply = 0) => {
+      const next = new URLSearchParams(searchParams);
+      next.set(GAME_PARAM, gameId);
+      if (ply > 0) {
+        next.set(PLY_PARAM, String(ply));
+      } else {
+        next.delete(PLY_PARAM);
+      }
+      setSearchParams(next);
+    },
+    [searchParams, setSearchParams],
+  );
+
+  const refreshInsights = useCallback(() => setInsightsRefresh((n) => n + 1), []);
 
   async function loadGamesPage(newPage: number) {
     if (!uploadId) return;
@@ -95,7 +181,7 @@ export function SavedDashboardPage() {
 
   function handleSelectGame(index: number) {
     const summary = gameSummaries.find((game) => game.game_index === index);
-    if (summary) void loadGameDetail(summary);
+    if (summary) openPosition(summary.id);
   }
 
   if (status === "loading") {
@@ -150,7 +236,17 @@ export function SavedDashboardPage() {
 
       <DashboardSummary stats={stats} />
 
-      <UploadAnalysisPanel uploadId={upload.id} totalGames={upload.game_count} />
+      <UploadAnalysisPanel
+        uploadId={upload.id}
+        totalGames={upload.game_count}
+        onBatchSettled={refreshInsights}
+      />
+
+      <TrainingInsights
+        insights={insights}
+        error={insightsError}
+        onOpenPosition={openPosition}
+      />
 
       <div className="games-section">
         <div>
@@ -190,10 +286,14 @@ export function SavedDashboardPage() {
           </p>
         )}
         {!isLoadingGame && selectedGame && (
+          // Keyed on the ply as well as the game: the viewer reads
+          // `initialPly` once and owns ply thereafter, so jumping to a second
+          // position in the same game has to remount to take effect.
           <ChessGameViewer
-            key={selectedGame.id ?? selectedGame.index}
+            key={`${selectedGame.id ?? selectedGame.index}:${linkedPly || 0}`}
             game={selectedGame}
             gameId={selectedGame.id}
+            initialPly={Number.isFinite(linkedPly) ? linkedPly : 0}
           />
         )}
       </div>

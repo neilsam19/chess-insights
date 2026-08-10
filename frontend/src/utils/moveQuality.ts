@@ -3,6 +3,7 @@ import type {
   MoveQuality,
   MoveQualityLabel,
   PlayerScore,
+  SpecialClassification,
 } from "../types/moveQuality";
 
 /** Shown wherever a metric has no sample, so a gap never reads as a zero. */
@@ -73,12 +74,27 @@ const QUALITY_SYMBOL: Record<"inaccuracy" | "mistake" | "blunder", string> = {
   blunder: "??",
 };
 
+/**
+ * Plain-language quality from the two fields that determine it.
+ *
+ * Takes the fields rather than a whole move, because upload-level review
+ * positions carry the same two facts in a different shape and must read
+ * identically - "Blunder" here and "blunder" there would look like two
+ * different classifications of the same move.
+ */
+export function qualityLabel(
+  quality: MoveQualityLabel,
+  special: SpecialClassification | null,
+): string {
+  if (special === "missed_mate") return "Missed mate";
+  if (special === "allowed_mate") return "Allowed mate";
+  if (special === "mate_sequence") return "Forced mate sequence";
+  return QUALITY_TEXT[quality];
+}
+
 /** Plain-language quality, for the current-move readout. */
 export function describeQuality(move: MoveQuality): string {
-  if (move.special_classification === "missed_mate") return "Missed mate";
-  if (move.special_classification === "allowed_mate") return "Allowed mate";
-  if (move.special_classification === "mate_sequence") return "Forced mate sequence";
-  return QUALITY_TEXT[move.quality];
+  return qualityLabel(move.quality, move.special_classification);
 }
 
 /**

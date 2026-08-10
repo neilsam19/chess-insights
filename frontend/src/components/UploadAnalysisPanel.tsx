@@ -10,6 +10,14 @@ const MAX_POLL_INTERVAL_MS = 20000;
 interface UploadAnalysisPanelProps {
   uploadId: string;
   totalGames: number;
+  /**
+   * Fired when a batch stops running. This panel is the only thing watching,
+   * so anything derived from "more games are now analysed" - the training
+   * insights, for one - learns about it here rather than polling too.
+   *
+   * Must be referentially stable, or the effect below re-fires every render.
+   */
+  onBatchSettled?: () => void;
 }
 
 /**
@@ -23,6 +31,7 @@ interface UploadAnalysisPanelProps {
 export function UploadAnalysisPanel({
   uploadId,
   totalGames,
+  onBatchSettled,
 }: UploadAnalysisPanelProps) {
   const [batch, setBatch] = useState<BatchStatus | null>(null);
   const [summary, setSummary] = useState<BatchCreated | null>(null);
@@ -66,6 +75,14 @@ export function UploadAnalysisPanel({
       clearTimeout(timer);
     };
   }, [active, batchId]);
+
+  // Fires once per batch, when it reaches a terminal state. Keyed on the batch
+  // id as well as activity so two consecutive batches each report in.
+  useEffect(() => {
+    if (batchId && !active) {
+      onBatchSettled?.();
+    }
+  }, [batchId, active, onBatchSettled]);
 
   const start = useCallback(async () => {
     setIsBusy(true);

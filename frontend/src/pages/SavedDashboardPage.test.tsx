@@ -40,6 +40,15 @@ vi.mock("../api/moveQuality", () => ({
   })),
 }));
 
+// The training insights section has its own tests; here it only needs to stay
+// off the network. Rejecting renders its error state, which these tests
+// deliberately ignore.
+vi.mock("../api/uploadMoveQuality", () => ({
+  getUploadMoveQuality: vi.fn(async () => {
+    throw new Error("not exercised by these tests");
+  }),
+}));
+
 const UPLOAD_ID = "aaaaaaaa-0000-4000-8000-000000000000";
 
 function summary(index: number, id: string, white: string, opening: string): GameSummary {
@@ -174,9 +183,14 @@ describe("SavedDashboardPage", () => {
     renderPage();
 
     // The first game is auto-selected, so its opening appears twice: once in
-    // the list row and once in the board viewer's header.
-    const selected = await screen.findAllByText("Sicilian Defense: Najdorf Variation · B90");
-    expect(selected).toHaveLength(2);
+    // the list row and once in the board viewer's header. Waited for as a
+    // condition rather than with findAllByText, which returns as soon as one
+    // match exists and so would pass before the viewer had rendered.
+    await waitFor(() =>
+      expect(
+        screen.getAllByText("Sicilian Defense: Najdorf Variation · B90"),
+      ).toHaveLength(2),
+    );
 
     // The unselected game appears only in the list.
     expect(screen.getAllByText("Nimzo-Indian Defense · B90")).toHaveLength(1);
