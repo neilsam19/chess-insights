@@ -157,14 +157,21 @@ function MetricColumns({ metrics }: { metrics: MoveQualityMetrics }) {
   );
 }
 
+/**
+ * The headings matching `MetricColumns`, as cells rather than a row.
+ *
+ * A `<tr>` here would be nested inside the caller's `<tr>`, which browsers
+ * repair by hoisting the cells out - leaving the headings and the values in
+ * different rows and every column one place out.
+ */
 function MetricHeadings() {
   return (
-    <tr>
+    <>
       <th>Games</th>
       <th>Graded moves</th>
       <th>Average loss</th>
       <th>Critical</th>
-    </tr>
+    </>
   );
 }
 

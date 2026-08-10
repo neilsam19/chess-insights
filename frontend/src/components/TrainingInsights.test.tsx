@@ -249,6 +249,32 @@ describe("the tables", () => {
     expect(cells(/^Black/)).toEqual(["Black", "18", "687", "26", "6"]);
   });
 
+  it("puts every heading in one row, above the values it names", () => {
+    // A nested <tr> is repaired by the browser rather than rejected, so the
+    // only symptom is columns one place out of line - which no assertion
+    // about the body rows can see.
+    render(<TrainingInsights insights={insights()} />);
+
+    for (const [name, first] of [
+      ["By colour", "Colour"],
+      ["By opening", "Opening"],
+    ] as const) {
+      const table = within(screen.getByRole("table", { name }));
+
+      expect(table.getAllByRole("columnheader").map((th) => th.textContent)).toEqual([
+        first,
+        "Games",
+        "Graded moves",
+        "Average loss",
+        "Critical",
+      ]);
+      // One header row plus one row per entry, and nothing extra.
+      expect(table.getAllByRole("row")).toHaveLength(
+        1 + (name === "By colour" ? 2 : 1),
+      );
+    }
+  });
+
   it("labels the unclassified opening bucket rather than naming it", () => {
     render(
       <TrainingInsights

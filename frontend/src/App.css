@@ -281,6 +281,15 @@
   margin: 4px 0 0;
 }
 
+/* Numeric columns shrink to their content so the opening name - which can run
+   to three lines - takes the space instead of squeezing the figures. */
+.training-insights .opening-table th:not(:first-child),
+.training-insights .opening-table td:not(:first-child) {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
 .recommendation-list {
   display: flex;
   flex-direction: column;
