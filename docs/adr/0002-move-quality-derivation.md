@@ -552,6 +552,83 @@ were *produced*. This one identifies how they are *interpreted*.
 
 ---
 
+## 8a. The evidence contract *(CP9)*
+
+`app/schemas/evidence.py`, assembled by `app/services/evidence.py`. Internal:
+no endpoint exposes it, and nothing in this sprint consumes it. What CP9 fixes
+is the **shape**, so a later sprint can hand a position to a model without that
+model recomputing anything or reaching for the database.
+
+```text
+EvidenceEnvelope
+  contract_version                     # EVIDENCE_CONTRACT_VERSION
+  evidence: EvidenceItem[]
+  explanation: str | null              # always null here — see below
+
+EvidenceItem
+  game        { game_id, upload_id, game_index, white_name, black_name,
+                result, played_date_text, player_color, player_result,
+                eco, opening_name, opening_source, opening_matched_ply }
+  move        { move_row_id, ply, move_number, side, san, uci,
+                fen_before, fen_after }
+  engine      { before_evaluation_id, after_evaluation_id, best_move_uci,
+                is_exact_best_move, depth_reached, nodes, time_ms }
+  assessment  { stored_white_score_before, stored_white_score_after,
+                player_score_before, player_score_after,
+                centipawn_loss, quality, special_classification,
+                unscored_reason }
+  provenance  { analysis_run_id, analysis_job_id, engine_name, engine_version,
+                engine_binary_sha256, requested_depth, engine_options,
+                run_started_at, run_completed_at, move_quality_version }
+```
+
+**Two versions, because a consumer needs both.**
+`EVIDENCE_CONTRACT_VERSION` says how to parse the payload;
+`MOVE_QUALITY_VERSION` says what the numbers in it mean. They move
+independently: reordering fields is not a change of meaning, and changing a
+threshold is not a change of shape.
+
+**Stored and derived scores travel together.** `stored_white_score_*` is the
+canonical row as the worker wrote it; `player_score_*` is the D1/D2 derivation
+of that same row. Carrying both is what makes a future explanation checkable —
+a cited claim can be validated against the raw value rather than trusted — and
+only the player-relative form can say whether a checkmate was delivered or
+received, per D2.
+
+**Items are self-contained, including provenance.** A future feature may send
+one item. An item that needed its bundle to be interpretable could not be sent
+safely on its own.
+
+**Facts and prose are separated structurally, not by convention.** There is no
+free-text field anywhere inside an evidence item — only ids, numbers, enum
+values, and strings that came verbatim out of the database (SAN, UCI, FEN,
+names). Generated text has exactly one home, `explanation`, beside the
+evidence and never inside it. A model's output therefore cannot come to sit
+where a measured value is read from.
+
+This is enforced by a test holding the **complete field list with the source of
+every field**, rather than by a heuristic over string contents. Heuristics were
+tried and rejected: an opening name in the real library runs to 80 characters
+and eight words (`English Opening: Symmetrical Variation, Anti-Benoni
+Variation, Spielmann Defense`), so any rule loose enough to admit it would
+admit a sentence too. Adding a field without declaring its source fails the
+test — which is precisely the change that would let prose into the facts.
+
+**Nothing that locates the machine.** No filesystem path, no engine binary
+location, no database URL, no environment value. `EngineMetadataOut` already
+omits the engine path for the same reason. Asserted by walking every string in
+the serialized payload, so a field added later is covered without anyone
+remembering to extend the check.
+
+**Absence is a normal state.** A game with no completed run, or with
+`user_color == "unknown"`, returns an empty envelope rather than raising —
+the same shape, carrying nothing.
+
+Verified over the developer's library at CP9: **3,490 evidence items across 79
+games, zero path or secret violations, byte-identical on repeat serialization.**
+
+---
+
 ## 9. Non-goals
 
 Not built in this sprint:
