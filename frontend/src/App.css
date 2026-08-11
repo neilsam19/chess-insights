@@ -270,6 +270,23 @@
   color: var(--text-h);
 }
 
+/* Set apart from the findings above it: this explains how they were derived,
+   and reading as one more finding would be worse than not being there. */
+.training-explainer {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.training-explainer p {
+  margin: 0 0 8px;
+  max-width: 68ch;
+}
+
+.training-explainer p:last-child {
+  margin-bottom: 0;
+}
+
 .training-coverage-headline {
   margin: 0;
   font-size: 16px;

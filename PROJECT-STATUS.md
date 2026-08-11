@@ -2,19 +2,20 @@
 
 **Purpose of this file:** a self-contained snapshot for planning the next
 sprint. It assumes no prior context. Hand it to a planner along with the
-question "what should Sprint 6 be?"
+question "what should Sprint 7 be?"
 
-**Last updated:** 2026-08-01
-**Current state:** Sprints 1–5 complete, accepted, committed, and pushed.
-**Repo:** `main` clean, level with `origin/main`.
+**Last updated:** 2026-08-11
+**Current state:** Sprints 1–6 complete, accepted, and committed.
+**Repo:** `main` clean.
 
 ---
 
 ## 1. What the product does today
 
 A personal chess analytics tool. A single user uploads their own PGN files,
-gets statistics and a board viewer, saves analyses permanently, and has
-Stockfish evaluate saved games as durable background work.
+gets statistics and a board viewer, saves analyses permanently, has Stockfish
+evaluate saved games as durable background work, and is told which of their own
+moves cost the most and what to work on next.
 
 ```
 upload .pgn  →  preview (stateless)  →  pick which player name is yours
@@ -23,6 +24,8 @@ upload .pgn  →  preview (stateless)  →  pick which player name is yours
              →  Analyze Game (or Analyze All Games)
              →  job queued, worker runs Stockfish, page polls progress
              →  evaluation graph, synced to the board
+             →  move quality per move, weakness summary per upload,
+                training recommendations linked to real positions
 ```
 
 What the user sees:
@@ -38,6 +41,21 @@ What the user sees:
 - Per upload: **Analyze All Games**, aggregate progress across every game,
   batch cancel, and a report of what was skipped as already analysed
 
+Added by Sprint 6, all derived on read from evaluations already stored:
+
+- **Per move:** centipawn loss, an inaccuracy / mistake / blunder label,
+  `?!` / `?` / `??` annotations in the move list, whether the move matched the
+  engine's first choice, and mate errors reported as their own category
+- **Per game:** average and median centipawn loss, engine-agreement rate,
+  mistake counts, and a filterable "moves to review" list with
+  previous/next-issue navigation
+- **Per upload:** the same metrics aggregated, split by colour and by opening,
+  a ranked list of the costliest positions, and up to four **training
+  recommendations** — each stating its sample, citing specific positions, and
+  deep-linking to the exact move
+- An explainer stating the fixed thresholds and that nothing here understands
+  chess
+
 ---
 
 ## 2. Verified state (reproducible)
@@ -46,22 +64,31 @@ Run from a clean checkout with Docker running:
 
 ```powershell
 docker compose up -d
-cd backend && .\.venv\Scripts\python.exe -m pytest -q      # 376 passed
+cd backend && .\.venv\Scripts\python.exe -m pytest -q      # 618 passed
 .\.venv\Scripts\python.exe -m alembic check                # clean
 cd ..\frontend && npm test && npm run lint && npm run build
 ```
 
 | Check | Result |
 |---|---|
-| Backend tests, engine configured | 376 passed |
-| Backend tests, `STOCKFISH_PATH=""` | 370 passed, 6 skipped |
-| Frontend tests | 54 passed |
+| Backend tests, engine configured | 618 passed |
+| Backend tests, `STOCKFISH_PATH=""` | 612 passed, 6 skipped |
+| Frontend tests | 138 passed |
 | Lint / build | exit 0 / exit 0 |
 | `alembic check` | no new upgrade operations |
 | Schema built from an empty database | 4 migrations, no drift |
 
-Live development data: **3 uploads, 79 games, 6,972 moves, 9 batches, 163 jobs,
-43 analysis runs, 3,236 position evaluations, 40 of 79 games fully analysed.**
+**Sprint 6 added no migration.** The migration count is unchanged from Sprint 5
+on purpose: move quality is computed on read, so there is no derived-data table
+to keep in step with the evaluations it came from.
+
+Live development data: **3 uploads, 79 games, 6,972 moves, 10 batches, 202 jobs,
+82 analysis runs, 7,051 position evaluations, 79 of 79 games fully analysed.**
+
+Move quality over that library: **3,490 player moves, 3,461 of them graded**,
+ACPL 20 on both multi-game uploads, engine agreement 51–56%. The 56-game upload
+is the only one with enough data to produce a second recommendation beyond
+"review these positions" — which is the sample discipline working, not a gap.
 
 The engine-free run matters as much as the other: **the ordinary suite must
 never require a Stockfish binary.** Engine tests use a fake in-memory engine;
@@ -163,10 +190,12 @@ GET    /api/uploads                    paginated
 GET    /api/uploads/{id}
 GET    /api/uploads/{id}/stats
 GET    /api/uploads/{id}/games         paginated summaries, no move arrays
+GET    /api/uploads/{id}/move-quality  aggregate + recommendations (read-only)
 DELETE /api/uploads/{id}
 POST   /api/uploads/{id}/analysis      bulk enqueue → 202/200/404/503
 GET    /api/games/{id}                 full detail incl. moves
 GET    /api/games/{id}/analysis        discriminated union (see below)
+GET    /api/games/{id}/move-quality    per-move grades (read-only)
 POST   /api/games/{id}/analysis        enqueue → 202/200/409/404/422/503
 GET    /api/analysis/jobs/{id}
 POST   /api/analysis/jobs/{id}/cancel
@@ -215,14 +244,37 @@ Added by Sprint 5:
 17. Matching active jobs are not duplicated; matching completed runs are reused.
 18. Resumability is game-level — an interrupted game restarts from ply 0.
 
+Added by Sprint 6 (full list, with rationale, in
+`docs/sprint-6-acceptance.md`):
+
+19. Move quality is derived on read. No derived-data table, no migration.
+20. A mate is never converted into a centipawn number, at any layer.
+21. `mate_in_white = 0` is attributed by **ply parity**, never by a sign.
+22. Centipawn loss is clamped at zero.
+23. Only the saved player's moves are graded.
+24. A game matching neither player is `not_gradable`, never graded as White.
+25. Every aggregate's denominator is completed, gradable games only, and every
+    figure is shown beside its sample.
+26. Thresholds and sample floors are server-owned; none is a request parameter.
+27. A recommendation fires only when its sample floor **and** its
+    meaningfulness gate are met, and cites positions from the upload asked for.
+28. Recommendation wording claims no chess motif (denylist test).
+29. Ordering is total — equal severities cannot swap between requests.
+30. Every Sprint 6 endpoint is read-only.
+31. The evidence payload holds no path, secret, or environment value.
+32. Facts and generated prose are structurally separated.
+
 ---
 
-## 5. Three tests that must be able to fail
+## 5. Tests that must be able to fail
 
-Three mechanisms are invisible when working and catastrophic when silently
+Some mechanisms are invisible when working and catastrophic when silently
 broken. Each was verified by deliberately breaking the code and confirming the
 test goes red. **If any of these ever passes after such a change, the test has
 stopped testing anything.**
+
+Sprint 5's three, re-confirmed in Sprint 6 CP10 and **not to be rewritten to
+make a newer test easier**:
 
 | Mechanism | Break it by | Test must |
 |---|---|---|
@@ -233,6 +285,18 @@ stopped testing anything.**
 The first is why competing sessions set `statement_timeout` — without it,
 removing `SKIP LOCKED` makes the test hang rather than fail, and a suite that
 hangs on regression is barely better than one that passes on it.
+
+Sprint 6 adds seven more, listed in `docs/sprint-6-acceptance.md`. The one that
+needs breaking **in both directions** is mate-zero ply parity: a single fixed
+sign is right by accident for one colour, so `True` and `False` must each be
+tried.
+
+CP10 also probed ten mechanisms the plan did *not* name, looking for a break
+nothing catches. Two were found and closed: both percentage helpers could be
+swapped to Python's `round()` with the entire suite green, and the coverage
+precedence could be reordered without any test noticing. **Confirming that
+planned tests fail is weak evidence — they were written for those mechanisms.
+The probes are where the real gaps were.**
 
 ---
 
@@ -262,26 +326,35 @@ remedies are all in place; the trap is real.
 
 ---
 
-## 7. What Sprint 6 inherits
+## 7. What Sprint 7 inherits
 
-**3,236 position evaluations across 40 games are already stored**, and every
-one carries `best_move_uci` alongside the score. That is exactly the input
-move-quality analysis needs, and it needs no re-analysis to get started.
+The open design question Sprint 6 inherited — store derived move quality or
+compute it on read — **was answered: compute on read.** Aggregating a 56-game
+upload takes five bounded queries and in-memory arithmetic, and the query count
+is asserted by test rather than assumed. There is still no derived-data table,
+and no invalidation story is needed because there is nothing to invalidate.
 
-Two deliberate affordances left in place for this:
+Two affordances left in place for a future sprint:
 
-- `PositionEvaluationOut.score` — the **player-relative** score — is already on
-  the wire and in the TypeScript types, but the UI renders `white_score`
-  instead (standard engine convention). `score` is not dead code; it is what
-  centipawn loss should be computed from.
-- `best_move_uci` is stored per position specifically so the played move can be
-  compared against the engine's preference without re-running anything.
+- **`app/schemas/evidence.py` and `app/services/evidence.py`** define a stable,
+  self-contained record of one position — game context, the move, what the
+  engine said, the assessment, and full provenance — assembled only from stored
+  rows and Sprint 6 derivations. It is **not exposed over HTTP** and nothing
+  consumes it. It exists so a later sprint can hand a position to a model
+  without that model recomputing anything or reaching for the database.
+- **`EvidenceEnvelope.explanation`** is the single slot where generated prose
+  would sit, beside the evidence rather than inside it. It is always null.
+  There is deliberately nowhere inside an evidence item to put a sentence, so a
+  model's output can never later be mistaken for something measured.
 
-Deriving centipawn loss requires no schema change: it is a function of
-consecutive evaluations plus `moves.uci`. Whether derived values should be
-**stored** (a new table) or **computed on read** is an open design question —
-storing them would be the project's first derived-data table, and every
-existing aggregate is computed on read.
+`EVIDENCE_CONTRACT_VERSION` (payload shape) and `MOVE_QUALITY_VERSION` (the
+rules that produced the values) are separate on purpose: a consumer needs one
+to parse and the other to know what the numbers mean.
+
+The library is now **fully analysed — 79 of 79 games**, so a Sprint 7 feature
+can assume real data rather than a thin sample. It should still degrade
+gracefully: coverage handling is load-bearing and well tested, and throwing it
+away would be a regression.
 
 ---
 
@@ -289,12 +362,20 @@ existing aggregate is computed on read.
 
 Not defects — scoped out on purpose:
 
-- **No move-quality classification.** Evaluations are stored; centipawn loss,
-  accuracy, and blunder/mistake labels are not derived from them yet. This is
-  the obvious Sprint 6 candidate and the clearest user-facing payoff left.
 - **No re-analysis at a different depth.** The data model supports it (a
   different depth is a different `config_hash`, so it would be a new job rather
-  than a mutation), but no UI offers it. Small, self-contained, deferred twice.
+  than a mutation), but no UI offers it. Small, self-contained, **deferred
+  three times now** — Sprints 4, 5, and 6. Either do it or stop listing it.
+- **No accuracy percentage.** Centipawn loss, labels, and counts are derived;
+  a single headline "accuracy" figure is not. Deliberate: Lichess and
+  Chess.com use different formulas, and inventing a third that resembles
+  neither would be worse than showing none.
+- **Recommendations do not name chess motifs.** They can say which positions
+  cost the most and where the losses cluster, never *why* in chess terms. That
+  is enforced by a denylist test, not merely unimplemented — the rules are
+  arithmetic and have no basis for a motif claim.
+- **No position-level explanations.** The evidence contract is defined but not
+  exposed or consumed.
 - **No opening family rollups.** Openings group by full canonical name, so
   `Sicilian Defense: Najdorf Variation` and `…, English Attack` count
   separately.
@@ -329,7 +410,15 @@ Not defects — scoped out on purpose:
 ## 10. Working practices that have paid off
 
 - **Small checkpoints, one committable concept each, verified before moving on.**
-  Sprint 5 ran to 11 checkpoints.
+  Sprints 5 and 6 each ran to 11 checkpoints.
+- **Verifying against the developer's real library, not only fixtures.** This
+  is the practice that has paid off most. In Sprint 6 it caught a
+  recommendation firing on four centipawns of noise, and a test heuristic that
+  would have rejected a legitimate 80-character opening name. Both passed every
+  fixture.
+- **Probing for mechanisms no test defends**, rather than only confirming that
+  planned tests fail. The planned breaks all behaved; the two real gaps came
+  from ten extra probes.
 - **A plan file and an ADR before code.** Decisions that came out of
   implementation were amended back into
   `docs/adr/0001-durable-analysis-jobs.md` rather than lost.
@@ -343,21 +432,29 @@ Not defects — scoped out on purpose:
 
 ---
 
-## 11. Questions for a Sprint 6 planner
+## 11. Questions for a Sprint 7 planner
 
-1. Should derived move-quality values be **stored** in a new table or
-   **computed on read**? Every existing aggregate is computed on read; storing
-   would be the first exception, and would need an invalidation story when
-   evaluations change.
-2. Accuracy is not a standard metric — Lichess and Chess.com use different
-   formulas. Which definition, and is it worth matching a familiar one?
-3. Should move-quality thresholds (inaccuracy / mistake / blunder) be fixed, or
-   vary with position sharpness and material?
-4. The 39 unanalysed games are analysable in one click but take real time. Does
-   Sprint 6 assume a fully analysed library, or must every feature degrade
-   gracefully with partial coverage?
-5. Is **deployment** more valuable than more analysis features at this point?
-   The project is a strong local portfolio piece but has never run anywhere but
-   a laptop, and containerization was explicitly deferred.
-6. Re-analysis at a different depth is cheap to add and currently missing.
-   Sprint 6 feature, or still not worth it?
+1. Is **deployment** now the most valuable thing left? It has been deferred
+   twice while the feature set grew. The project is a strong local portfolio
+   piece that has never run anywhere but a laptop, and the honest blocker is
+   specific: `STOCKFISH_PATH` is a Windows `.exe`, and containerizing the
+   worker would fork the engine identity that analysis reuse depends on. That
+   is a real design problem, not a packaging chore.
+2. **Generative explanations** are the obvious next feature and the payload is
+   ready for them. But the whole sprint was built so a model's output can never
+   be mistaken for a measurement — what is the acceptance criterion for a
+   generated sentence, and how does a reader tell it from a derived one?
+3. Should move-quality thresholds stay **fixed**? They are currently the same
+   in every position. A 100-centipawn drop in a sharp middlegame and in a dead
+   drawn endgame are not the same event, but varying them makes every number
+   incomparable across games and much harder to defend.
+4. **Opening family rollups** would make the per-opening table far more useful
+   on a 56-game library — Najdorf lines currently split across many buckets, so
+   most fall under the sample floor and are excluded from recommendations. Is
+   that a Sprint 7 feature or a smaller fix to the existing table?
+5. Re-analysis at another depth has now been deferred three times. Commit to it
+   or delete it from the roadmap.
+6. Is anything needed for **more than one user**? There is still no
+   authentication, and every design decision so far has assumed a single
+   trusted person. That assumption is load-bearing in more places than the
+   missing login screen.

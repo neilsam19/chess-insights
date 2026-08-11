@@ -198,6 +198,45 @@ describe("states with no figures", () => {
     expect(screen.queryByText("Average centipawn loss")).not.toBeInTheDocument();
   });
 
+  it("explains how the figures were derived, and does not while there are none", () => {
+    const { rerender } = render(<TrainingInsights insights={insights()} />);
+
+    const explainer = screen.getByRole("heading", { name: "How these are worked out" })
+      .parentElement as HTMLElement;
+
+    // The thresholds are the server's, and fixed. A reader who assumes they
+    // adapt to the position would read every label as a stronger claim than
+    // it is.
+    expect(explainer).toHaveTextContent("inaccuracy from 50");
+    expect(explainer).toHaveTextContent("mistake from 100");
+    expect(explainer).toHaveTextContent("blunder from 200");
+    // The sprint's central refusal, stated to the reader and not only in the
+    // code: a mate is never converted into a pawn count.
+    expect(explainer).toHaveTextContent(/never given a pawn value/);
+    // The page suggests what to practise, so it has to say outright that
+    // nothing here understood the chess.
+    expect(explainer).toHaveTextContent(/nothing here understands\s+chess/);
+
+    rerender(
+      <TrainingInsights
+        insights={insights({
+          coverage: coverage({ complete_games: 0, not_analyzed_games: 79 }),
+          overall: metrics({ games: 0 }),
+          by_color: [],
+          by_opening: [],
+          top_review_moves: [],
+          recommendations: [],
+        })}
+      />,
+    );
+
+    // Nothing to explain yet - the note would describe figures that are not
+    // on the page.
+    expect(
+      screen.queryByRole("heading", { name: "How these are worked out" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("says so plainly when nothing crossed the mistake threshold", () => {
     render(
       <TrainingInsights insights={insights({ top_review_moves: [], recommendations: [] })} />,

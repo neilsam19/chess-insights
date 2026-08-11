@@ -81,6 +81,7 @@ export function TrainingInsights({
             moves={insights.top_review_moves}
             onOpenPosition={onOpenPosition}
           />
+          <HowThisWorks />
         </>
       )}
     </section>
@@ -222,6 +223,41 @@ function ByOpening({ rows }: { rows: OpeningMoveQuality[] }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * What the reader is looking at, and what it deliberately is not.
+ *
+ * Every claim on this page is arithmetic over stored engine evaluations, and
+ * the last paragraph says so plainly. A page that suggests what to practise
+ * invites the assumption that something understood the chess; saying outright
+ * that nothing did is what keeps "you were worse after this move" from being
+ * read as "you played the wrong plan here".
+ */
+function HowThisWorks() {
+  return (
+    <section className="analysis-note training-explainer">
+      <h3>How these are worked out</h3>
+      <p>
+        Centipawn loss is how far the engine&apos;s evaluation of your position
+        fell after your move - 100 centipawns is one pawn, and lower is better.
+        A move is an inaccuracy from 50, a mistake from 100, and a blunder from
+        200. Those thresholds are fixed and are the same for every game.
+      </p>
+      <p>
+        Missing a forced mate or walking into one is counted separately from
+        centipawn losses and never given a pawn value, so it will not appear in
+        any average. A recommendation is only made when there is enough data
+        behind it, which is why a weakness you know you have may not be listed.
+      </p>
+      <p>
+        All of this is arithmetic over evaluations already stored for your
+        games. Nothing here re-runs the engine, and nothing here understands
+        chess: it can tell you which positions cost you the most, but not what
+        the right plan was.
+      </p>
+    </section>
   );
 }
 

@@ -665,3 +665,41 @@ Not built in this sprint:
 13. Run selection reuses the existing resolution; no second definition exists.
 14. Worker, leasing, claiming, heartbeat, recovery, and concurrency behaviour is
     unchanged.
+
+---
+
+## 11. Outcome *(CP11)*
+
+Every decision above survived implementation. Three are worth recording because
+they were tested against the developer's real library rather than only against
+fixtures, and two of them changed as a result.
+
+**§4 D2 (ply parity for `mate 0`) was the right call and is the sprint's
+highest-value mechanism.** It is also the easiest to half-test: a fixed sign is
+correct by accident for one colour, so CP10 breaks it in *both* directions.
+Assigning White fails only the Black-mates tests and vice versa. A test suite
+that checks one direction proves nothing about the other.
+
+**§7's sample floors were not sufficient on their own.** As specified, the
+opening rule selected the weakest bucket that met its floors. On real data that
+produced *"spend your next session on the Accelerated Dragon"* from two games at
+ACPL 24 against a library average of 20 — four centipawns, presented as a
+finding. The colour rule already had a meaningfulness gate; the opening rule did
+not, and the asymmetry was invisible in fixtures because fixtures are written
+with obvious gaps. The gate (≥5cp **and** ≥20% relative) is now shared by both,
+and the real library correctly produces no opening recommendation for the two
+smaller uploads.
+
+**§8a's "no free text" property needed a stronger test than it first got.** The
+initial check was a heuristic — at most five spaces, no trailing full stop —
+and it passed. The real library then produced `English Opening: Symmetrical
+Variation, Anti-Benoni Variation, Spielmann Defense`: 80 characters, eight
+words, and entirely legitimate stored data. Any rule loose enough to admit that
+is loose enough to admit a sentence, so the test was replaced with a complete
+field list naming the source of all 45 fields. Adding a field without declaring
+where it comes from now fails — which is exactly the change that would let
+prose in.
+
+The general lesson, recorded for the next sprint: **a threshold that fires on
+fixtures has not been tested, only demonstrated.** Fixtures are written with
+the gap the author intends to find. Real data is where a rule meets the margin.

@@ -4,7 +4,7 @@
 
 A personalized chess analytics platform that turns a player's game history into opening trends, recurring patterns, and (eventually) engine-backed insights.
 
-Built incrementally in small, verified sprints rather than all at once. Current status: **Sprint 4 complete** - a saved game can now be analysed by Stockfish, with per-position evaluations persisted and drawn as an evaluation graph, on top of position-based opening classification from Sprint 3, the PostgreSQL-backed "Analysis History" from Sprint 2, and the stateless upload/preview flow from Sprint 1.
+Built incrementally in small, verified sprints rather than all at once. Current status: **Sprint 6 complete** - those stored evaluations are now turned into per-move quality, upload-level weakness summaries, and training recommendations that link to real positions, on top of the durable background analysis from Sprint 5, Stockfish evaluation and the evaluation graph from Sprint 4, position-based opening classification from Sprint 3, the PostgreSQL-backed "Analysis History" from Sprint 2, and the stateless upload/preview flow from Sprint 1.
 
 ## What it does today
 
@@ -14,6 +14,7 @@ Built incrementally in small, verified sprints rather than all at once. Current 
 4. **Save the analysis** to permanently import it into PostgreSQL
 5. Browse a **Recent Analyses** list on the home page, reopen any saved upload later (even after restarting the app), or delete it
 6. On a saved analysis's dashboard, games are paginated and a game's full move list is only fetched when you actually select it - the app never ships every move from every game up front
+7. Analyse games with Stockfish, then see **which of your own moves cost the most** and what to work on next, with every recommendation linking straight to the position it came from
 
 ### Preview vs. permanent import
 
@@ -110,6 +111,45 @@ The action is safe to press twice: games with a matching completed analysis are
 skipped and games already queued are left alone, and the response says how many
 of each. **Cancel All** stops everything unfinished while keeping the games that
 already completed.
+
+## Move quality and training insights
+
+Once a game is analysed, the stored evaluations are turned into feedback about
+**your own moves**. Nothing here re-runs the engine — every figure is
+arithmetic over evaluations already on disk, computed when the page is loaded.
+
+Per move: how far the engine's assessment of your position fell (**centipawn
+loss**), a label from fixed thresholds — inaccuracy from 50, mistake from 100,
+blunder from 200 — shown as `?!` / `?` / `??` in the move list, and whether you
+found the engine's first choice. Filter to mistakes or worse and step through
+your problem moves with Previous/Next issue.
+
+Per upload: the same metrics aggregated, split by colour and by opening, a
+ranked list of your costliest positions, and up to four **training
+recommendations**. Each states the sample behind it, cites specific positions,
+and links straight to the move on the board.
+
+Only your moves are graded — your opponent's are never derived, counted, or
+returned. A game saved under a name matching neither player is reported as
+ungradable rather than silently graded as White.
+
+### What it will not claim
+
+A recommendation can say which positions cost you the most and where your
+losses cluster. It will never say *why* in chess terms — no forks, no pawn
+structure, no "you struggle in endgames". The rules are arithmetic over
+evaluations and have no basis for that kind of claim, and a denylist test
+enforces it rather than leaving it to good intentions.
+
+A recommendation is only made when it clears both a sample floor and a
+meaningfulness threshold, so a weakness you know you have may not be listed.
+That is deliberate: an early version named an opening as a weakness on the
+strength of two games at four centipawns above the library average, which is
+noise presented as advice.
+
+Mate errors are counted separately and **never given a pawn value**, so missing
+a forced mate cannot quietly inflate or deflate an average. Centipawn and mate
+stay distinct types from the database through to the screen.
 
 ### Running the worker
 
@@ -246,6 +286,13 @@ product data, so the two can never disagree. The reasoning, including when that
 would be worth revisiting, is in
 [docs/adr/0001-durable-analysis-jobs.md](docs/adr/0001-durable-analysis-jobs.md).
 
+Move quality adds **no table and no migration**: it is computed when a page is
+read, from evaluations already stored. Why that is the right trade here - and
+what would have to change for a derived-data table to be worth it - is in
+[docs/adr/0002-move-quality-derivation.md](docs/adr/0002-move-quality-derivation.md),
+along with the rule that decides who delivered a checkmate, which is the
+subtlest correctness problem in the sprint.
+
 ## Prerequisites
 
 - Python 3.12
@@ -335,11 +382,15 @@ pytest -m stockfish_integration      # only the real-engine tests
 pytest -m "not stockfish_integration"  # everything else
 ```
 
-Without an engine configured you should see `370 passed, 6 skipped`; with one,
-`376 passed`.
+Without an engine configured you should see `612 passed, 6 skipped`; with one,
+`618 passed`.
 
-A full manual acceptance checklist is in
-[docs/sprint-5-acceptance.md](docs/sprint-5-acceptance.md).
+Full manual acceptance checklists are in
+[docs/sprint-5-acceptance.md](docs/sprint-5-acceptance.md) and
+[docs/sprint-6-acceptance.md](docs/sprint-6-acceptance.md). Each ends with a
+table of mechanisms that are **required to fail** when deliberately broken —
+worth re-running after any change to the worker or the move-quality
+derivation.
 
 Frontend (from `frontend/`):
 
@@ -353,11 +404,13 @@ npm run lint
 
 Deliberately out of scope for now, planned for later sprints:
 
-- No move-quality classification - evaluations are stored, but centipawn loss,
-  accuracy, and blunder/mistake labels are not derived from them yet
 - No re-analysis of an already-analysed game at a different depth. The data
   model supports it (a different depth is a different configuration, so it
   would be a new job rather than a mutation), but no UI offers it
+- No single headline "accuracy" percentage. Lichess and Chess.com use different
+  formulas, and a third one resembling neither would be worse than none
+- No explanation of *why* a move was bad in chess terms - move quality says
+  what an evaluation did, not what the right plan was
 - Resumability is game-level: a game interrupted mid-analysis restarts from the
   first position rather than resuming, because partial evaluations are
   deliberately never persisted
