@@ -12,14 +12,11 @@ and both mate directions, without inventing fixtures.
 """
 
 import uuid
-from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 
-from app.main import app
-from app.api.dependencies import get_engine_factory
 from app.core.database import engine as db_engine
 from app.models.analysis_job import JOB_QUEUED, JOB_RUNNING, AnalysisJob
 from app.models.analysis_run import STATUS_COMPLETE, AnalysisRun
@@ -32,63 +29,8 @@ from app.services.upload_move_quality import (
     RUNNING,
     _coverage_bucket,
 )
-from app.worker import runner
-from app.worker.runner import WorkerConfig
 from fake_engine import FakeEngine, cp, mate
 from sample_data import SAMPLE_PGN_BYTES, SAMPLE_PGN_TEXT
-
-# NOTE: engine_holder / analysis_client / work are duplicated from
-# test_move_quality_routes.py and two Sprint 5 files. Promoting them to
-# conftest is recorded as CP11 cleanup rather than folded in here.
-
-
-@pytest.fixture
-def engine_holder():
-    return {"engine": FakeEngine()}
-
-
-@pytest.fixture
-def analysis_client(client: TestClient, db_session, monkeypatch):
-    """TestClient whose engine configuration resolves and matches FakeEngine."""
-    from pathlib import Path
-
-    from app.services import engine as engine_module
-
-    identity = FakeEngine().identify()
-    monkeypatch.setattr(
-        engine_module.settings, "stockfish_path", str(Path(engine_module.__file__))
-    )
-    monkeypatch.setattr(engine_module.settings, "stockfish_threads", identity.options["Threads"])
-    monkeypatch.setattr(engine_module.settings, "stockfish_hash_mb", identity.options["Hash"])
-    monkeypatch.setattr(engine_module, "_cached_binary_hash", lambda path: identity.binary_sha256)
-
-    yield client
-    app.dependency_overrides.pop(get_engine_factory, None)
-
-
-@pytest.fixture
-def work(db_session, engine_holder):
-    """Run one worker pass over whatever is queued, with the fake engine."""
-
-    @contextmanager
-    def _session_factory():
-        yield db_session
-
-    def _run():
-        return runner.run_once(
-            config=WorkerConfig(
-                worker_id="test-worker",
-                lease_seconds=60,
-                poll_seconds=0.01,
-                depth=12,
-                heartbeat_seconds=0.0,
-                retry_delay_seconds=0,
-            ),
-            session_factory=_session_factory,
-            engine_factory=lambda: engine_holder["engine"],
-        )
-
-    return _run
 
 
 # --- helpers --------------------------------------------------------------

@@ -6,9 +6,7 @@ which is exactly what happens in production with a separate process.
 """
 
 import uuid
-from contextlib import contextmanager
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -20,78 +18,8 @@ from app.repositories import analysis as analysis_repo
 from app.repositories import analysis_jobs as jobs_repo
 from app.services import analysis_enqueue
 from app.services.engine import EngineUnavailableError
-from app.worker import runner
-from app.worker.runner import WorkerConfig
 from fake_engine import FakeEngine, cp, mate
 from sample_data import SAMPLE_PGN_BYTES
-
-
-@pytest.fixture
-def engine_holder():
-    """Mutable holder so a test can swap the engine between worker passes."""
-    return {"engine": FakeEngine()}
-
-
-@pytest.fixture
-def analysis_client(client: TestClient, db_session, monkeypatch):
-    """TestClient with a resolvable engine configuration matching FakeEngine.
-
-    The endpoint never *starts* an engine, but it does resolve configuration to
-    compute analysis identity and to answer 503. Two things are arranged here:
-
-    * `stockfish_path` points at a real file, so resolution succeeds on
-      machines with no Stockfish installed;
-    * the resolved options and binary digest are made to match what FakeEngine
-      reports.
-
-    That second part matters. Reuse asks "would this configuration produce the
-    same evaluations?", and in production a run's recorded identity always
-    matches the configuration that produced it. If the fake disagreed with
-    settings, reuse would decline for a reason that cannot occur in reality.
-    """
-    from pathlib import Path
-
-    from app.services import engine as engine_module
-
-    identity = FakeEngine().identify()
-    monkeypatch.setattr(
-        engine_module.settings, "stockfish_path", str(Path(engine_module.__file__))
-    )
-    monkeypatch.setattr(engine_module.settings, "stockfish_threads", identity.options["Threads"])
-    monkeypatch.setattr(engine_module.settings, "stockfish_hash_mb", identity.options["Hash"])
-    monkeypatch.setattr(
-        engine_module, "_cached_binary_hash", lambda path: identity.binary_sha256
-    )
-
-    yield client
-    app.dependency_overrides.pop(get_engine_factory, None)
-
-
-@pytest.fixture
-def work(db_session, engine_holder):
-    """Run one worker pass over whatever is queued, with the fake engine."""
-
-    @contextmanager
-    def _session_factory():
-        yield db_session
-
-    def _run():
-        return runner.run_once(
-            config=WorkerConfig(
-                worker_id="test-worker",
-                lease_seconds=60,
-                poll_seconds=0.01,
-                depth=12,
-                heartbeat_seconds=0.0,
-                # No retry backoff: a test driving passes by hand should not
-                # have to wait out a delay meant for real crash loops.
-                retry_delay_seconds=0,
-            ),
-            session_factory=_session_factory,
-            engine_factory=lambda: engine_holder["engine"],
-        )
-
-    return _run
 
 
 def _saved_game(client: TestClient, db_session, player_name: str = "NeilSamant") -> Game:

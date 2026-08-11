@@ -36,8 +36,6 @@ from app.models.position_evaluation import PositionEvaluation
 from app.models.upload import Upload
 from app.repositories import analysis_jobs as jobs_repo
 from app.services.analysis_batches import derive_batch_status
-from app.worker import runner
-from app.worker.runner import WorkerConfig
 from fake_engine import FakeEngine
 from sample_data import SAMPLE_PGN_BYTES
 
@@ -121,11 +119,6 @@ def session_factory(db_session):
 
 
 @pytest.fixture
-def engine_holder():
-    return {"engine": FakeEngine()}
-
-
-@pytest.fixture
 def bulk_client(client: TestClient, monkeypatch):
     """Engine configuration that matches FakeEngine, as in the route tests."""
     from pathlib import Path
@@ -142,29 +135,6 @@ def bulk_client(client: TestClient, monkeypatch):
         engine_module, "_cached_binary_hash", lambda path: identity.binary_sha256
     )
     return client
-
-
-@pytest.fixture
-def work(db_session, engine_holder):
-    @contextmanager
-    def _session_factory():
-        yield db_session
-
-    def _run():
-        return runner.run_once(
-            config=WorkerConfig(
-                worker_id="test-worker",
-                lease_seconds=60,
-                poll_seconds=0.01,
-                depth=12,
-                heartbeat_seconds=0.0,
-                retry_delay_seconds=0,
-            ),
-            session_factory=_session_factory,
-            engine_factory=lambda: engine_holder["engine"],
-        )
-
-    return _run
 
 
 def _upload(client: TestClient, db_session) -> Upload:
