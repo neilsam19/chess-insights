@@ -21,11 +21,17 @@ from sqlalchemy import event, func, select
 from app.main import app
 from app.api.dependencies import get_engine_factory
 from app.core.database import engine as db_engine
-from app.models.analysis_job import AnalysisJob
-from app.models.analysis_run import AnalysisRun
+from app.models.analysis_job import JOB_QUEUED, JOB_RUNNING, AnalysisJob
+from app.models.analysis_run import STATUS_COMPLETE, AnalysisRun
 from app.models.game import Game
 from app.models.position_evaluation import PositionEvaluation
 from app.services.engine import RawEvaluation
+from app.services.upload_move_quality import (
+    NOT_GRADABLE,
+    QUEUED,
+    RUNNING,
+    _coverage_bucket,
+)
 from app.worker import runner
 from app.worker.runner import WorkerConfig
 from fake_engine import FakeEngine, cp, mate
@@ -503,6 +509,54 @@ class TestPartialCoverage:
 
         assert coverage["queued_games"] == 1
         assert coverage["complete_games"] == 0
+
+    def test_an_analysis_in_flight_outranks_an_older_complete_run(self):
+        """A game being re-analysed reports as running, not complete.
+
+        The precedence is asserted on the bucketing function directly because
+        no API route can currently produce this state - a completed analysis is
+        reused rather than re-run. The claim is in the module docstring and in
+        `game_analysis_state`, so it needs a guard now rather than when a
+        re-analysis path is finally added and silently disagrees with the game
+        page it links to.
+        """
+        game = Game(user_color="white")
+        complete = AnalysisRun(status=STATUS_COMPLETE)
+
+        assert (
+            _coverage_bucket(
+                game,
+                active_job=AnalysisJob(status=JOB_RUNNING),
+                complete_run=complete,
+                latest_job=None,
+                latest_run=complete,
+            )
+            == RUNNING
+        )
+        assert (
+            _coverage_bucket(
+                game,
+                active_job=AnalysisJob(status=JOB_QUEUED),
+                complete_run=complete,
+                latest_job=None,
+                latest_run=complete,
+            )
+            == QUEUED
+        )
+
+    def test_an_ungradable_colour_outranks_every_analysis_state(self):
+        """No amount of analysis makes a game with no identifiable player
+        gradable, so the colour check comes before all of them."""
+        assert (
+            _coverage_bucket(
+                Game(user_color="unknown"),
+                active_job=AnalysisJob(status=JOB_RUNNING),
+                complete_run=AnalysisRun(status=STATUS_COMPLETE),
+                latest_job=None,
+                latest_run=None,
+            )
+            == NOT_GRADABLE
+        )
 
     def test_a_cancelled_game_is_counted_as_cancelled(self, analysis_client, db_session):
         upload_id = _upload(analysis_client)

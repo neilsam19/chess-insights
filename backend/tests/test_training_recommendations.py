@@ -198,6 +198,17 @@ class TestConversionPractice:
     def test_stays_silent_when_the_mistakes_were_made_from_worse_positions(self):
         assert of_type(build(review_moves=self._moves(2, 5)), CONVERSION_PRACTICE) is None
 
+    def test_the_share_it_quotes_rounds_away_from_zero(self):
+        """5 of 8 is 62.5%, which the user must see as 63, not 62.
+
+        This module keeps its own copy of the percentage helper, so the
+        matching test in `test_move_quality_summary.py` does not cover it.
+        """
+        recommendation = of_type(build(review_moves=self._moves(5, 8)), CONVERSION_PRACTICE)
+
+        assert "63%" in recommendation.explanation
+        assert "5 of 8" in recommendation.explanation
+
     def test_stays_silent_below_the_sample_floor(self):
         """Four moves cannot establish a pattern however they are distributed."""
         assert of_type(build(review_moves=self._moves(4, 4)), CONVERSION_PRACTICE) is None

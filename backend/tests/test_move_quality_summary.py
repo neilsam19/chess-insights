@@ -167,6 +167,32 @@ def test_a_mate_sequence_is_neither_graded_nor_critical():
     assert summary.critical_mistakes == 0
 
 
+def test_a_percentage_on_a_half_rounds_away_from_zero():
+    """1 of 8 is 12.5%, which must display as 13 rather than 12.
+
+    Python's built-in round() is half-to-even, so it would round 12.5 down to
+    12 while rounding 37.5 up to 38 - two identical halves going in opposite
+    directions. The module picks half-away-from-zero deliberately; without this
+    test both percentage helpers can be swapped to round() and the whole suite
+    stays green.
+    """
+    summary = summarize_moves([graded(100, MISTAKE)] + [fact(UNSCORED) for _ in range(7)])
+
+    assert summary.graded_moves == 1
+    assert summary.total_player_moves == 8
+    assert summary.coverage_percent == 13
+
+
+def test_the_engine_agreement_rate_rounds_the_same_way():
+    facts = [fact(is_exact_best_move=index == 0) for index in range(8)]
+
+    summary = summarize_moves(facts)
+
+    assert summary.exact_best_move_count == 1
+    assert summary.exact_best_move_comparable == 8
+    assert summary.exact_best_move_percent == 13
+
+
 # --- mistake counts -------------------------------------------------------
 
 
